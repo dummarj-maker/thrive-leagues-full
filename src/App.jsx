@@ -1,3 +1,6 @@
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Home from './Home.jsx';
+import Onboarding from './Onboarding.jsx'; // our login/create-league page
 import React, { useEffect, useState } from 'react'
 import { Link, Routes, Route, useNavigate } from 'react-router-dom'
 import { supabase } from './supabaseClient'
