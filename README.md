@@ -15,3 +15,4 @@ npm run dev
 
 Pages included: Home, Onboarding (login), Join, Create, Challenges, Schedule, Scoreboard, Standings, Admin, Owner.
 
+trigger redeploy
