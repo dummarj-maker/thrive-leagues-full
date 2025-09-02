@@ -1,5 +1,5 @@
 {
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/" }
+  "crons": [
+    { "path": "/api/lock-picks", "schedule": "0 17 * * 1" }
   ]
 }
