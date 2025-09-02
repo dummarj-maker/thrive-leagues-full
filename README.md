@@ -14,3 +14,4 @@ npm run dev
 3) Deploy (Vercel, framework: Vite).
 
 Pages included: Home, Onboarding (login), Join, Create, Challenges, Schedule, Scoreboard, Standings, Admin, Owner.
+
