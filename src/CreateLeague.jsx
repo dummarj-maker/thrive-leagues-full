@@ -6,7 +6,7 @@ import { supabase } from './supabaseClient';
 export default function CreateLeague({ session }) {
   const navigate = useNavigate();
 
-  // gate: must be logged in
+  // show gate if not logged in
   if (!session) {
     return (
       <div className="card">
@@ -19,34 +19,40 @@ export default function CreateLeague({ session }) {
 
   // form state
   const [name, setName] = useState('My League');
-  const [plan, setPlan] = useState('basic');         // 'basic' | 'premium' | 'annual'
-  const [promo, setPromo] = useState('');            // e.g., FIRSTFREE
+  const [plan, setPlan] = useState('basic');          // basic | premium | annual
+  const [promo, setPromo] = useState('FIRSTFREE');    // optional
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
   async function handleCreate(e) {
     e.preventDefault();
-    setError('');
+    setErrorMsg('');
     setLoading(true);
 
     try {
-      // get user id (prefer prop, fall back to API)
+      // 1) Get the current user id (prefer session prop)
       const uid =
         session?.user?.id ||
         (await supabase.auth.getUser()).data.user?.id;
 
       if (!uid) throw new Error('No user ID found. Please log in again.');
 
-      // build payload for leagues insert
+      // 2) Build league payload — these columns must exist in public.leagues
+      // Required: name (text), owner_id (uuid), plan (text)
+      // Optional: promo_code (text), status (text)
       const payload = {
-        name,
-        plan,                                   // must exist as a text column in public.leagues
-        promo_code: (promo || '').toUpperCase() || null, // nullable text col ok
-        owner_id: uid,                          // must exist as uuid NOT NULL in public.leagues
-        status: 'pending',                      // optional (remove if you don’t have this column)
+        name: name?.trim(),
+        owner_id: uid,
+        plan,
+        promo_code: (promo || '').trim().toUpperCase() || null,
+        status: 'pending',
       };
 
-      // create league
+      if (!payload.name) {
+        throw new Error('Please enter a league name.');
+      }
+
+      // 3) Insert league and return its id
       const { data: league, error: insertErr } = await supabase
         .from('leagues')
         .insert(payload)
@@ -54,19 +60,27 @@ export default function CreateLeague({ session }) {
         .single();
 
       if (insertErr) throw insertErr;
+      if (!league?.id) throw new Error('League was created but ID was not returned.');
 
-      // add creator as commissioner/member (table & columns must exist)
-      await supabase.from('league_members').insert({
-        league_id: league.id,
-        member_id: uid,
-        role: 'commissioner',
-      });
+      // 4) Add creator as commissioner in league_members
+      // Required columns in public.league_members: league_id (uuid), member_id (uuid), role (text)
+      const { error: lmErr } = await supabase
+        .from('league_members')
+        .insert({
+          league_id: league.id,
+          member_id: uid,
+          role: 'commissioner',
+        })
+        .single();
 
-      alert('League created! (Checkout wiring comes next.)');
-      navigate('/owner'); // or wherever you want to send them
+      if (lmErr) throw lmErr;
+
+      // 5) (Checkout wiring comes later) -> for now, go to Owner console
+      navigate('/owner', { replace: true });
     } catch (err) {
-      setError(err.message);
-    } finally {
+      console.error(err);
+      // Supabase errors often have .message
+      setErrorMsg(err?.message || 'Something went wrong creating the league.');
       setLoading(false);
     }
   }
@@ -83,6 +97,7 @@ export default function CreateLeague({ session }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="My League"
+            required
           />
         </label>
 
@@ -109,17 +124,17 @@ export default function CreateLeague({ session }) {
           />
         </label>
 
-        {error && <p className="error">{error}</p>}
+        {errorMsg ? <p className="error" style={{ marginTop: 6 }}>{errorMsg}</p> : null}
 
-        <div>
-          <button className="btn" type="submit" disabled={loading}>
-            {loading ? 'Creating…' : 'Continue'}
-          </button>
-          <p className="mono" style={{ marginTop: 8 }}>
-            Checkout & activation happen next.
-          </p>
-        </div>
+        <button className="btn" type="submit" disabled={loading}>
+          {loading ? 'Creating…' : 'Continue'}
+        </button>
+
+        <p className="mono" style={{ marginTop: 8 }}>
+          Checkout &amp; activation happen next.
+        </p>
       </form>
     </div>
   );
 }
+
