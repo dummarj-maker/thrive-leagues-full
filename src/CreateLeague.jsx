@@ -1,69 +1,71 @@
 // src/CreateLeague.jsx
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from './supabaseClient';
 
 export default function CreateLeague({ session }) {
   const navigate = useNavigate();
 
-  // If not logged in, nudge to Onboarding (magic link page)
+  // gate: must be logged in
   if (!session) {
     return (
       <div className="card">
         <h2>Create a League</h2>
         <p className="error">Auth session missing!</p>
-        <a className="btn" href="/onboarding">Log in</a>
+        <Link className="btn" to="/onboarding">Log in</Link>
       </div>
     );
   }
 
-  // UI state
-  const [plan, setPlan] = useState('basic');     // 'basic' | 'premium' | 'annual'
-  const [promo, setPromo] = useState('');        // e.g. FIRSTFREE
-  const [name, setName] = useState('My League'); // simple default
+  // form state
+  const [name, setName] = useState('My League');
+  const [plan, setPlan] = useState('basic');         // 'basic' | 'premium' | 'annual'
+  const [promo, setPromo] = useState('');            // e.g., FIRSTFREE
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  async function handleCreate() {
+  async function handleCreate(e) {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
     try {
-      setError('');
-      setLoading(true);
+      // get user id (prefer prop, fall back to API)
+      const uid =
+        session?.user?.id ||
+        (await supabase.auth.getUser()).data.user?.id;
 
-      // confirm current user
-      const { data: { user }, error: uErr } = await supabase.auth.getUser();
-      if (uErr) throw uErr;
-      if (!user) throw new Error('Not signed in');
+      if (!uid) throw new Error('No user ID found. Please log in again.');
 
-      // 1) create the league
-      const { data: league, error: lErr } = await supabase
+      // build payload for leagues insert
+      const payload = {
+        name,
+        plan,                                   // must exist as a text column in public.leagues
+        promo_code: (promo || '').toUpperCase() || null, // nullable text col ok
+        owner_id: uid,                          // must exist as uuid NOT NULL in public.leagues
+        status: 'pending',                      // optional (remove if you don’t have this column)
+      };
+
+      // create league
+      const { data: league, error: insertErr } = await supabase
         .from('leagues')
-        .insert({
-          name: name || 'My League',
-          plan,
-          promo_code: promo || null,
-          commissioner_id: user.id,
-          created_at: new Date().toISOString()
-        })
+        .insert(payload)
         .select('id')
         .single();
-      if (lErr) throw lErr;
 
-      // 2) add the commissioner as a member
-      const { error: mErr } = await supabase
-        .from('league_members')
-        .insert({
-          league_id: league.id,
-          member_id: user.id,
-          role: 'commissioner'
-        });
-      if (mErr) throw mErr;
+      if (insertErr) throw insertErr;
 
-      // 3) go to the Owner console for this league
-      navigate(`/owner?league=${league.id}`);
+      // add creator as commissioner/member (table & columns must exist)
+      await supabase.from('league_members').insert({
+        league_id: league.id,
+        member_id: uid,
+        role: 'commissioner',
+      });
+
+      alert('League created! (Checkout wiring comes next.)');
+      navigate('/owner'); // or wherever you want to send them
     } catch (err) {
-      console.error(err);
       setError(err.message);
-      alert(err.message);
     } finally {
       setLoading(false);
     }
@@ -72,10 +74,10 @@ export default function CreateLeague({ session }) {
   return (
     <div className="card">
       <h2>Create a League</h2>
-      {error && <p className="error">{error}</p>}
 
-      <div className="grid">
-        <label>League name
+      <form onSubmit={handleCreate} className="grid" style={{ gap: 12 }}>
+        <label>
+          League name
           <input
             className="input"
             value={name}
@@ -84,7 +86,8 @@ export default function CreateLeague({ session }) {
           />
         </label>
 
-        <label>Plan
+        <label>
+          Plan
           <select
             className="input"
             value={plan}
@@ -96,7 +99,8 @@ export default function CreateLeague({ session }) {
           </select>
         </label>
 
-        <label>Promo code (optional)
+        <label>
+          Promo code (optional)
           <input
             className="input"
             value={promo}
@@ -104,15 +108,18 @@ export default function CreateLeague({ session }) {
             placeholder="FIRSTFREE"
           />
         </label>
-      </div>
 
-      <button className="btn" onClick={handleCreate} disabled={loading}>
-        {loading ? 'Creating…' : 'Continue'}
-      </button>
+        {error && <p className="error">{error}</p>}
 
-      <p className="mono" style={{ marginTop: 8 }}>
-        Checkout &amp; activation happen next.
-      </p>
+        <div>
+          <button className="btn" type="submit" disabled={loading}>
+            {loading ? 'Creating…' : 'Continue'}
+          </button>
+          <p className="mono" style={{ marginTop: 8 }}>
+            Checkout & activation happen next.
+          </p>
+        </div>
+      </form>
     </div>
   );
 }
