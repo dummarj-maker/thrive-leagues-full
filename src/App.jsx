@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom';
 import { supabase } from './supabaseClient';
-
+import Picks from './Picks.jsx';
 import Home from './Home.jsx';
 import Onboarding from './Onboarding.jsx';
 import JoinLeague from './JoinLeague.jsx';
@@ -56,6 +56,7 @@ export default function App() {
       <header className="topbar">
         <nav className="nav">
           <Link to="/home">Home</Link>
+          <Link to="/picks">Picks</Link>
           <Link to="/challenges">Challenges</Link>
           <Link to="/schedule">Schedule</Link>
           <Link to="/scoreboard">Scoreboard</Link>
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="/standings" element={<Standings />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/owner" element={<OwnerConsole />} />
+          <Route path="/picks" element={<Picks />} />
 
           {/* 404 fallback */}
           <Route path="*" element={<Navigate to="/onboarding" replace />} />
