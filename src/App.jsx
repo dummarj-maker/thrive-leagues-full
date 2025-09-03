@@ -84,7 +84,7 @@ export default function App() {
 
           {/* Optional public routes */}
           <Route path="/join" element={<JoinLeague />} />
-          <Route path="/create" element={<CreateLeague />} />
+<Route path="/create" element={<CreateLeague session={session} />} />
 
           {/* App pages (they can read session to show/hide content) */}
           <Route path="/home" element={<Home session={session} />} />
