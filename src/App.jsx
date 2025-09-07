@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom';
 import { supabase } from './supabaseClient';
+import AuthCallback from './AuthCallback'; 
 import Picks from './Picks.jsx';
 import Home from './Home.jsx';
 import Onboarding from './Onboarding.jsx';
