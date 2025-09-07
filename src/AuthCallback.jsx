@@ -1,47 +1,27 @@
 // src/AuthCallback.jsx
-
-import { useEffect } from 'react';
-
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-
 import { supabase } from './supabaseClient';
 
-
-
 export default function AuthCallback() {
-
+  const [msg, setMsg] = useState('Finishing sign-in…');
   const navigate = useNavigate();
 
-
-
   useEffect(() => {
+    let mounted = true;
 
-    // detectSessionInUrl will parse tokens on load.
+    (async () => {
+      const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+      if (error) {
+        setMsg(`Sign-in failed: ${error.message}`);
+        return;
+      }
+      // success → go to home (router will show you as logged in)
+      if (mounted) navigate('/home', { replace: true });
+    })();
 
-    // We just wait for Supabase to resolve the session, then move on.
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-
-      // go somewhere useful after login
-
-      navigate(session ? '/create' : '/onboarding', { replace: true });
-
-    });
-
+    return () => { mounted = false; };
   }, [navigate]);
 
-
-
-  return (
-
-    <div className="card">
-
-      <h2>Signing you in…</h2>
-
-      <p>Please wait a moment.</p>
-
-    </div>
-
-  );
-
+  return <div className="card"><p>{msg}</p></div>;
 }
