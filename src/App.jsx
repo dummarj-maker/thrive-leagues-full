@@ -96,6 +96,9 @@ export default function App() {
           <Route path="/admin" element={<Admin />} />
           <Route path="/owner" element={<OwnerConsole />} />
           <Route path="/picks" element={<Picks />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+
+
 
           {/* 404 fallback */}
           <Route path="*" element={<Navigate to="/onboarding" replace />} />
