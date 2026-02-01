@@ -1,9 +1,0 @@
-{
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)", "destination": "/" }
-  ],
-  "crons": [
-    { "path": "/api/lock-picks", "schedule": "0 17 * * 1" }
-  ]
-}
