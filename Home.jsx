@@ -233,4 +233,3 @@ const styles = {
   footerLine: { fontWeight: 700, marginBottom: 6 },
   footerSmall: { fontSize: 12, color: "rgba(234,240,247,0.65)" },
 };
-
