@@ -39,7 +39,7 @@ export default function LeagueSetup() {
         <div style={{ marginTop: 14 }}>
           <Card title="Set up your league">
             <p className="muted" style={{ marginTop: 0 }}>
-              You’re logged in. Next: set up your family so Thrive can personalize the experience.
+              One-time setup. This personalizes Thrive Leagues for your family.
             </p>
 
             <form onSubmit={onCreate} style={{ display: "grid", gap: 12 }}>
@@ -108,7 +108,6 @@ export default function LeagueSetup() {
                 className="btnGhost"
                 type="button"
                 onClick={() => {
-                  // Optional: allow resetting setup without drama
                   localStorage.removeItem("tl_league");
                   setFamilyName("");
                   setLeagueName("");
