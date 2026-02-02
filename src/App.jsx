@@ -1,12 +1,21 @@
-import React from "react";
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Link,
+  useLocation,
+} from "react-router-dom";
 
 import Home from "./Home.jsx";
 import Playbook from "./Playbook.jsx";
 import Login from "./pages/Login.jsx";
 import LeagueSetup from "./pages/LeagueSetup.jsx";
 
-// --- Minimal placeholders (safe if you don't have these pages yet) ---
+import { supabase } from "./lib/supabaseClient";
+
+// Placeholders (safe)
 function Draft() {
   return (
     <div className="pageWrap">
@@ -16,14 +25,13 @@ function Draft() {
         </div>
         <div className="cardBody">
           <p className="muted" style={{ marginTop: 0 }}>
-            Draft will be wired in next. This page exists so routing is stable.
+            Draft will be wired in next. Routing is stable.
           </p>
         </div>
       </div>
     </div>
   );
 }
-
 function CommissionerTools() {
   return (
     <div className="pageWrap">
@@ -40,7 +48,6 @@ function CommissionerTools() {
     </div>
   );
 }
-
 function Achievements() {
   return (
     <div className="pageWrap">
@@ -50,7 +57,7 @@ function Achievements() {
         </div>
         <div className="cardBody">
           <p className="muted" style={{ marginTop: 0 }}>
-            Badges live inside Achievements (as you decided).
+            Badges live inside Achievements.
           </p>
         </div>
       </div>
@@ -58,38 +65,78 @@ function Achievements() {
   );
 }
 
-// --- Session + League (placeholder for now, replace with Supabase later) ---
-function getSession() {
-  try {
-    return JSON.parse(localStorage.getItem("tl_session") || "null");
-  } catch {
-    return null;
-  }
-}
+// League config placeholder (local for now)
 function hasLeagueConfigured() {
   return localStorage.getItem("tl_league") ? true : false;
 }
 
-// --- Guards ---
+// Builder email (set in .env)
+const BUILDER_EMAIL = (import.meta.env.VITE_BUILDER_EMAIL || "").toLowerCase().trim();
+
+function useSession() {
+  const [session, setSession] = useState(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function init() {
+      const { data } = await supabase.auth.getSession();
+      if (!ignore) {
+        setSession(data.session || null);
+        setReady(true);
+      }
+    }
+
+    init();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+
+    return () => {
+      ignore = true;
+      sub?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  return { session, ready };
+}
+
+function isBuilder(session) {
+  const email = session?.user?.email?.toLowerCase?.() || "";
+  return !!BUILDER_EMAIL && email === BUILDER_EMAIL;
+}
+
+// Guards
 function RequireAuth({ children }) {
   const location = useLocation();
-  const session = getSession();
-  if (!session) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  }
+  const { session, ready } = useSession();
+
+  if (!ready) return null; // keep it simple; could add loading UI later
+  if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   return children;
 }
 
-function RequireLeague({ children }) {
+function RequireLeagueUnlessBuilder({ children }) {
   const location = useLocation();
+  const { session, ready } = useSession();
+
+  if (!ready) return null;
+
+  // Builder bypasses league setup
+  if (session && isBuilder(session)) return children;
+
   if (!hasLeagueConfigured()) {
     return <Navigate to="/setup" replace state={{ from: location.pathname }} />;
   }
   return children;
 }
 
-// --- A simple “app shell” only for logged-in + configured users ---
 function AppShell({ children }) {
+  const { session } = useSession();
+  const builder = useMemo(() => isBuilder(session), [session]);
+
   return (
     <div className="appShell">
       <div className="fixedDesktopCanvas">
@@ -98,7 +145,7 @@ function AppShell({ children }) {
             <div className="brandMark">TL</div>
             <div>
               <div className="brandName">Thrive Leagues</div>
-              <div className="brandSub">Stage 2 • Playbook Build</div>
+              <div className="brandSub">{builder ? "Builder Mode" : "Family League"}</div>
             </div>
           </div>
 
@@ -114,9 +161,8 @@ function AppShell({ children }) {
             <button
               className="btnGhost"
               type="button"
-              onClick={() => {
-                localStorage.removeItem("tl_session");
-                // keep league data; login is separate from league setup
+              onClick={async () => {
+                await supabase.auth.signOut();
                 window.location.href = "/login";
               }}
             >
@@ -125,9 +171,7 @@ function AppShell({ children }) {
           </div>
         </header>
 
-        <main style={{ marginTop: 14 }}>
-          {children}
-        </main>
+        <main style={{ marginTop: 14 }}>{children}</main>
 
         <footer className="footer">
           <span className="muted">Thrive Leagues • Built brick-by-brick</span>
@@ -142,16 +186,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Root behavior */}
-        <Route
-          path="/"
-          element={<Navigate to="/home" replace />}
-        />
+        {/* Root */}
+        <Route path="/" element={<Navigate to="/home" replace />} />
 
-        {/* Public routes */}
+        {/* Public */}
         <Route path="/login" element={<Login />} />
 
-        {/* Logged-in but league not configured goes here */}
+        {/* Logged in, no league => setup (builder can still access but may want to skip) */}
         <Route
           path="/setup"
           element={
@@ -161,16 +202,16 @@ export default function App() {
           }
         />
 
-        {/* Protected app routes (must be logged in + league configured) */}
+        {/* Protected + league gate (builder bypasses) */}
         <Route
           path="/home"
           element={
             <RequireAuth>
-              <RequireLeague>
+              <RequireLeagueUnlessBuilder>
                 <AppShell>
                   <Home />
                 </AppShell>
-              </RequireLeague>
+              </RequireLeagueUnlessBuilder>
             </RequireAuth>
           }
         />
@@ -179,11 +220,11 @@ export default function App() {
           path="/playbook"
           element={
             <RequireAuth>
-              <RequireLeague>
+              <RequireLeagueUnlessBuilder>
                 <AppShell>
                   <Playbook />
                 </AppShell>
-              </RequireLeague>
+              </RequireLeagueUnlessBuilder>
             </RequireAuth>
           }
         />
@@ -192,11 +233,11 @@ export default function App() {
           path="/draft"
           element={
             <RequireAuth>
-              <RequireLeague>
+              <RequireLeagueUnlessBuilder>
                 <AppShell>
                   <Draft />
                 </AppShell>
-              </RequireLeague>
+              </RequireLeagueUnlessBuilder>
             </RequireAuth>
           }
         />
@@ -205,11 +246,11 @@ export default function App() {
           path="/commissioner-tools"
           element={
             <RequireAuth>
-              <RequireLeague>
+              <RequireLeagueUnlessBuilder>
                 <AppShell>
                   <CommissionerTools />
                 </AppShell>
-              </RequireLeague>
+              </RequireLeagueUnlessBuilder>
             </RequireAuth>
           }
         />
@@ -218,11 +259,11 @@ export default function App() {
           path="/achievements"
           element={
             <RequireAuth>
-              <RequireLeague>
+              <RequireLeagueUnlessBuilder>
                 <AppShell>
                   <Achievements />
                 </AppShell>
-              </RequireLeague>
+              </RequireLeagueUnlessBuilder>
             </RequireAuth>
           }
         />
