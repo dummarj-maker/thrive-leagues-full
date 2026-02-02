@@ -1,254 +1,236 @@
-The Thrive Leagues Playbook (Kids Edition)
-For Kids Ages 5 and Up
+# The Thrive Leagues Playbook  
+### Kids Edition (Ages 5 and Up)
 
-What Is Thrive Leagues?
-Thrive Leagues is a game your family plays together to help everyone grow.
+---
+
+## What Is Thrive Leagues?
+
+**Thrive Leagues is a game your family plays together to help everyone grow.**
+
 It helps us:
-Try our best
 
+- Try our best  
+- Help each other  
+- Learn new habits  
+- Get a little better every day  
 
-Help each other
+Thrive is **not** about being perfect.  
+It’s about **trying, learning, and doing it together**.
 
-
-Learn new habits
-
-
-Get a little better every day
-
-
-Thrive is not about being perfect.
- It’s about trying, learning, and doing it together.
 Our family plays Thrive because we believe we are:
-Better Together.
 
-What Thrive Is (and What It Isn’t)
-What Thrive Is
-A family game
+**Better Together.**
 
+---
 
-A way to practice good habits
+## What Thrive Is (and What It Isn’t)
 
+### What Thrive *Is*
 
-A place to encourage each other
+- A family game  
+- A way to practice good habits  
+- A place to encourage each other  
+- A chance to grow together  
 
+### What Thrive *Is Not*
 
-A chance to grow together
+- A test  
+- A punishment  
+- A way to embarrass anyone  
+- A way to prove who is “better”  
 
+**Everyone is learning.  
+Everyone is growing.**
 
-What Thrive Is Not
-A test
+---
 
+## How the Game Works
 
-A punishment
+Each week, you will be on a **team** with another family member.
 
-
-A way to embarrass anyone
-
-
-A way to prove who is “better”
-
-
-Everyone is learning. Everyone is growing.
-
-How the Game Works
-Each week, you will be on a team with another family member.
 Together, you will try to complete:
-One easy challenge
 
+- **One easy challenge**
+- **One medium challenge**
+- **One hard challenge**
 
-One medium challenge
+You earn points by:
 
+- **Trying your best**
+- **Finishing your challenges**
 
-One hard challenge
+If one person struggles, the other helps.
 
+**You win together.**
 
-You earn points by trying your best and finishing your challenges.
-You and your teammate help each other.
- If one person struggles, the other helps.
+---
 
-Trying Matters More Than Winning
+## Trying Matters More Than Winning
+
 In Thrive Leagues:
-Trying your best matters more than winning
 
+- Trying your best matters more than winning  
+- Helping others matters more than points  
+- Learning matters more than being perfect  
 
-Helping others matters more than points
+Sometimes you will win.  
+Sometimes someone else will win.
 
+**The most important thing is that everyone grows.**
 
-Learning matters more than being perfect
+---
 
+## Being a Good Teammate
 
-Sometimes you will win.
- Sometimes someone else will win.
-The most important thing is that everyone grows.
+### Good Teammates:
 
-Being a Good Teammate
-Good teammates:
-Encourage each other
+- Encourage each other  
+- Say kind and helpful words  
+- Celebrate effort  
+- Help when someone is struggling  
 
+### Bad Teammates:
 
-Say kind and helpful words
+- Make fun of others  
+- Lie about finishing challenges  
+- Brag to hurt feelings  
+- Try to win at all costs  
 
+We want to be teammates who **help each other succeed**.
 
-Celebrate effort
+---
 
+## Honesty and Effort
 
-Help when someone is struggling
-
-
-Bad teammates:
-Make fun of others
-
-
-Lie about finishing challenges
-
-
-Brag to hurt feelings
-
-
-Try to win at all costs
-
-
-We want to be teammates who help each other succeed.
-
-Honesty and Effort
 In Thrive Leagues:
-You should always tell the truth
 
-
-You should always try your best
-
-
-Shortcuts and cheating are not okay
-
+- You should always tell the truth  
+- You should always try your best  
+- Shortcuts and cheating are not okay  
 
 Doing the work is how we grow.
-Trying counts—even when something is hard.
 
-Making Mistakes Is Okay
+**Trying counts — even when something is hard.**
+
+---
+
+## Making Mistakes Is Okay
+
 Everyone makes mistakes.
+
 If you forget a challenge or don’t finish:
-It’s okay
 
+- It’s okay  
+- We talk about it  
+- We learn from it  
+- We try again next time  
 
-We talk about it
+**Mistakes help us grow.**
 
+---
 
-We learn from it
+## Talking Kindly
 
-
-We try again next time
-
-
-Mistakes help us grow.
-
-Talking Kindly
 Words are powerful.
+
 In Thrive Leagues:
-We talk kindly
 
+- We talk kindly  
+- We don’t yell or blame  
+- We don’t say hurtful things  
 
-We don’t yell or blame
+Joking is okay **if it makes people feel good**.
 
-
-We don’t say hurtful things
-
-
-Joking is okay if it makes people feel good.
 If words hurt someone’s feelings, we stop and talk about it.
 
-Who Is the Commissioner?
-The Commissioner is the person who helps run the league.
+---
+
+## Who Is the Commissioner?
+
+The **Commissioner** is the person who helps run the league.
+
 They:
-Help everyone stay organized
 
+- Help everyone stay organized  
+- Make decisions when needed  
+- Make sure the game is fair  
 
-Make decisions when needed
+Even though the Commissioner makes final decisions,  
+**everyone’s voice matters.**
 
+---
 
-Make sure the game is fair
+## Pauses and Busy Times
 
-
-Even though the Commissioner makes final decisions, everyone’s voice matters.
-
-Pauses and Busy Times
 Sometimes life gets busy.
+
 If that happens:
-The league can take a short break
 
+- The league can take a short break  
+- No one loses points  
+- We start again together  
 
-No one loses points
+**Thrive is here to help — even when life is hard.**
 
+---
 
-We start again together
+## Privacy and Sharing
 
+What happens in Thrive Leagues belongs to **your family**.
 
-Thrive is here to help us—even when life is hard.
+You do **not** have to:
 
-Privacy and Sharing
-What happens in Thrive Leagues belongs to your family.
-You do not have to:
-Share your points
+- Share your points  
+- Share your badges  
+- Share your progress  
 
+You can share **if you want**, but no one has to.
 
-Share your badges
+Your hard work matters — even if only your family sees it.
 
+---
 
-Share your progress
+## Changing the Game
 
-
-You can share if you want, but no one has to.
-Your hard work matters—even if only your family sees it.
-
-Changing the Game
 Families can change how they play Thrive if it helps them.
-First, we learn the game.
- Then, we get better at it.
- Later, we can make changes together.
+
+First, we learn the game.  
+Then, we get better at it.  
+Later, we can make changes together.
+
 There is no “wrong” way to play Thrive if:
-You try
 
+- You try  
+- You are honest  
+- You help others  
 
-You are honest
+---
 
+## What Winning Really Means
 
-You help others
-
-
-
-What Winning Really Means
 Winning Thrive Leagues means:
-You tried your best
 
-
-You helped your family
-
-
-You learned something new
-
-
-You grew a little
-
+- You tried your best  
+- You helped your family  
+- You learned something new  
+- You grew a little  
 
 Badges and points are fun.
- But growing together is the real win.
 
-Our Thrive Promise
+But **growing together is the real win.**
+
+---
+
+## Our Thrive Promise
+
 We promise to:
-Try our best
 
-
-Tell the truth
-
-
-Encourage each other
-
-
-Learn from mistakes
-
-
-Grow together
-
+- Try our best  
+- Tell the truth  
+- Encourage each other  
+- Learn from mistakes  
+- Grow together  
 
 Because we believe we are:
-Better Together.
 
+**Better Together.**
