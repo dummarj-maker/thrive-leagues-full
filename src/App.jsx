@@ -6,6 +6,7 @@ import {
   Navigate,
   Link,
   useLocation,
+  useNavigate,
 } from "react-router-dom";
 
 import Home from "./Home.jsx";
@@ -15,62 +16,11 @@ import LeagueSetup from "./pages/LeagueSetup.jsx";
 
 import { supabase } from "./lib/supabaseClient";
 
-// Placeholders (safe)
-function Draft() {
-  return (
-    <div className="pageWrap">
-      <div className="card">
-        <div className="cardHeader">
-          <h3 className="cardTitle">Draft</h3>
-        </div>
-        <div className="cardBody">
-          <p className="muted" style={{ marginTop: 0 }}>
-            Draft will be wired in next. Routing is stable.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-function CommissionerTools() {
-  return (
-    <div className="pageWrap">
-      <div className="card">
-        <div className="cardHeader">
-          <h3 className="cardTitle">Commissioner Tools</h3>
-        </div>
-        <div className="cardBody">
-          <p className="muted" style={{ marginTop: 0 }}>
-            Commissioner tools will be built brick-by-brick.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-function Achievements() {
-  return (
-    <div className="pageWrap">
-      <div className="card">
-        <div className="cardHeader">
-          <h3 className="cardTitle">Achievements</h3>
-        </div>
-        <div className="cardBody">
-          <p className="muted" style={{ marginTop: 0 }}>
-            Badges live inside Achievements.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// League config placeholder (local for now)
+// ---------- Helpers ----------
 function hasLeagueConfigured() {
-  return localStorage.getItem("tl_league") ? true : false;
+  return !!localStorage.getItem("tl_league");
 }
 
-// Builder email (set in .env)
 const BUILDER_EMAIL = (import.meta.env.VITE_BUILDER_EMAIL || "")
   .toLowerCase()
   .trim();
@@ -110,14 +60,15 @@ function isBuilder(session) {
   return !!BUILDER_EMAIL && email === BUILDER_EMAIL;
 }
 
-// Guards
+// ---------- Guards ----------
 function RequireAuth({ children }) {
   const location = useLocation();
   const { session, ready } = useSession();
 
-  if (!ready) return null; // keep it simple; could add loading UI later
-  if (!session)
+  if (!ready) return null;
+  if (!session) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
   return children;
 }
 
@@ -127,18 +78,36 @@ function RequireLeagueUnlessBuilder({ children }) {
 
   if (!ready) return null;
 
-  // Builder bypasses league setup
   if (session && isBuilder(session)) return children;
 
   if (!hasLeagueConfigured()) {
     return <Navigate to="/setup" replace state={{ from: location.pathname }} />;
   }
+
   return children;
 }
 
+// ---------- App Shell ----------
 function AppShell({ children }) {
   const { session } = useSession();
+  const navigate = useNavigate();
+
   const builder = useMemo(() => isBuilder(session), [session]);
+
+  function resetLeague() {
+    if (!builder) return;
+
+    const ok = window.confirm(
+      "Reset this league and return to setup?\n\n(This only affects your local league state.)"
+    );
+
+    if (!ok) return;
+
+    localStorage.removeItem("tl_league");
+    localStorage.removeItem("tl_wizard"); // optional future-proofing
+
+    navigate("/setup", { replace: true });
+  }
 
   return (
     <div className="appShell">
@@ -148,7 +117,9 @@ function AppShell({ children }) {
             <div className="brandMark">TL</div>
             <div>
               <div className="brandName">Thrive Leagues</div>
-              <div className="brandSub">{builder ? "Builder Mode" : "Family League"}</div>
+              <div className="brandSub">
+                {builder ? "Builder Mode" : "Family League"}
+              </div>
             </div>
           </div>
 
@@ -160,7 +131,18 @@ function AppShell({ children }) {
             <Link className="navLink" to="/achievements">Achievements</Link>
           </nav>
 
-          <div className="topRight">
+          <div className="topRight" style={{ display: "flex", gap: 8 }}>
+            {builder && (
+              <button
+                className="btnGhost"
+                type="button"
+                onClick={resetLeague}
+                title="Builder only"
+              >
+                Reset League
+              </button>
+            )}
+
             <button
               className="btnGhost"
               type="button"
@@ -185,17 +167,15 @@ function AppShell({ children }) {
   );
 }
 
+// ---------- Routes ----------
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Root */}
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route path="/" element={<Navigate to="/home" replace />} />
 
-        {/* Public */}
         <Route path="/login" element={<Login />} />
 
-        {/* Logged in, no league => setup (builder can still access but may want to skip) */}
         <Route
           path="/setup"
           element={
@@ -205,7 +185,6 @@ export default function App() {
           }
         />
 
-        {/* Protected + league gate (builder bypasses) */}
         <Route
           path="/home"
           element={
@@ -238,7 +217,7 @@ export default function App() {
             <RequireAuth>
               <RequireLeagueUnlessBuilder>
                 <AppShell>
-                  <Draft />
+                  <div className="pageWrap card">Draft placeholder</div>
                 </AppShell>
               </RequireLeagueUnlessBuilder>
             </RequireAuth>
@@ -251,7 +230,7 @@ export default function App() {
             <RequireAuth>
               <RequireLeagueUnlessBuilder>
                 <AppShell>
-                  <CommissionerTools />
+                  <div className="pageWrap card">Commissioner tools placeholder</div>
                 </AppShell>
               </RequireLeagueUnlessBuilder>
             </RequireAuth>
@@ -264,15 +243,14 @@ export default function App() {
             <RequireAuth>
               <RequireLeagueUnlessBuilder>
                 <AppShell>
-                  <Achievements />
+                  <div className="pageWrap card">Achievements placeholder</div>
                 </AppShell>
               </RequireLeagueUnlessBuilder>
             </RequireAuth>
           }
         />
 
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </BrowserRouter>
   );
