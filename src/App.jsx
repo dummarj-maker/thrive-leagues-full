@@ -71,7 +71,9 @@ function hasLeagueConfigured() {
 }
 
 // Builder email (set in .env)
-const BUILDER_EMAIL = (import.meta.env.VITE_BUILDER_EMAIL || "").toLowerCase().trim();
+const BUILDER_EMAIL = (import.meta.env.VITE_BUILDER_EMAIL || "")
+  .toLowerCase()
+  .trim();
 
 function useSession() {
   const [session, setSession] = useState(null);
@@ -114,7 +116,8 @@ function RequireAuth({ children }) {
   const { session, ready } = useSession();
 
   if (!ready) return null; // keep it simple; could add loading UI later
-  if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!session)
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   return children;
 }
 
@@ -187,7 +190,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {/* Root */}
-        <Route path="/" element={<Navigate to="/home" replace />} />
+        <Route path="/" element={<Navigate to="/login" replace />} />
 
         {/* Public */}
         <Route path="/login" element={<Login />} />
@@ -269,7 +272,7 @@ export default function App() {
         />
 
         {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/home" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   );
