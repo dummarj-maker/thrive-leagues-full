@@ -427,23 +427,21 @@ export default function LeagueSetup() {
   }
 
   function renderMembers() {
-  return (
-    <Card title="Add members" right={<Pill>Step 3</Pill>}>
-      <div className="muted" style={{ marginBottom: 10 }}>
-        Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an email.
-      </div>
-
-      {/* Header row */}
-      <div className="membersGridHeader">
-        <div className="colLabel muted">Member</div>
-        <div className="colLabel muted">Name (required)</div>
-        <div className="colLabel muted">Email (optional)</div>
-        <div className="colLabel muted" style={{ textAlign: "right" }}>
-          League manager
+    return (
+      <Card title="Add members" right={<Pill>Step 3</Pill>}>
+        <div className="muted" style={{ marginBottom: 10 }}>
+          Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an email.
         </div>
-      </div>
 
-      <div className="membersGrid">
+        <div className="membersGridHeader">
+          <div className="colLabel muted">Member</div>
+          <div className="colLabel muted">Name (required)</div>
+          <div className="colLabel muted">Email (optional)</div>
+          <div className="colLabel muted" style={{ textAlign: "right" }}>
+            League manager
+          </div>
+        </div>
+
         {/* Commissioner row */}
         <div className="membersRow commissionerRow">
           <div className="memberTag">
@@ -457,7 +455,9 @@ export default function LeagueSetup() {
               onChange={(e) => {
                 const v = e.target.value;
                 setMembers((prev) =>
-                  prev.map((m) => (m.role === "commissioner" ? { ...m, name: v } : m))
+                  prev.map((m) =>
+                    m.role === "commissioner" ? { ...m, name: v } : m
+                  )
                 );
               }}
               placeholder="Commissioner name"
@@ -469,89 +469,13 @@ export default function LeagueSetup() {
             <div className="helper muted">Commissioner email is pulled from your login.</div>
           </div>
 
-          <div className="lmCell">
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <label className="toggleWrap" title="Commissioner is always a League Manager">
               <input type="checkbox" checked readOnly />
               <span className="toggle" />
             </label>
-            <div className="helper muted lmHelp">
-              League managers can score matchups and <strong>enter points for everyone</strong>.
-            </div>
           </div>
         </div>
-
-        {/* Other members */}
-        {membersOnly.map((m, idx) => {
-          const label = `Member ${idx + 2}`;
-          const hasEmail = !!(m.email || "").trim();
-          const lmDisabled = !hasEmail;
-
-          return (
-            <div key={m.id} className="membersRow">
-              <div className="memberTag">{label}</div>
-
-              <div>
-                <input
-                  className="input"
-                  value={m.name}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, name: v } : x)));
-                  }}
-                  placeholder="Name"
-                />
-              </div>
-
-              <div>
-                <input
-                  className="input"
-                  value={m.email}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, email: v } : x)));
-                  }}
-                  placeholder="Email (optional)"
-                />
-                {m.isLeagueManager && !hasEmail ? (
-                  <div className="helper errorText">Add an email to grant league manager permissions.</div>
-                ) : null}
-              </div>
-
-              <div className="lmCell">
-                <label
-                  className={["toggleWrap", lmDisabled ? "disabled" : ""].join(" ")}
-                  title={
-                    lmDisabled
-                      ? "Add an email address to enable League Manager."
-                      : "League Managers can score matchups and enter points for everyone."
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!m.isLeagueManager}
-                    disabled={lmDisabled}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setMembers((prev) =>
-                        prev.map((x) => (x.id === m.id ? { ...x, isLeagueManager: checked } : x))
-                      );
-                    }}
-                  />
-                  <span className="toggle" />
-                </label>
-
-                <div className="helper muted lmHelp">
-                  League managers can score matchups and <strong>enter points for everyone</strong>.
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
 
         {/* Other members */}
         {membersOnly.map((m, idx) => {
