@@ -13,8 +13,10 @@ import Home from "./Home.jsx";
 import Playbook from "./Playbook.jsx";
 import Login from "./pages/Login.jsx";
 import LeagueSetup from "./pages/LeagueSetup.jsx";
+import CommissionerTools from "./pages/CommissionerTools.jsx";
 
 import { supabase } from "./lib/supabaseClient";
+import { canAccessCommissionerToolsFromLocalLeague } from "./lib/permissions";
 
 // ---------- Helpers ----------
 function hasLeagueConfigured() {
@@ -87,12 +89,44 @@ function RequireLeagueUnlessBuilder({ children }) {
   return children;
 }
 
+function RequireCommissionerToolsAccess({ children }) {
+  const location = useLocation();
+  const { session, ready } = useSession();
+
+  if (!ready) return null;
+  if (!session) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+
+  // Builder override (consistent with your app)
+  if (isBuilder(session)) return children;
+
+  // Must have league configured
+  if (!hasLeagueConfigured()) {
+    return <Navigate to="/setup" replace state={{ from: location.pathname }} />;
+  }
+
+  // Local-league based permissions (Stage 2)
+  const allowed = canAccessCommissionerToolsFromLocalLeague(session);
+  if (!allowed) {
+    return <Navigate to="/home" replace />;
+  }
+
+  return children;
+}
+
 // ---------- App Shell ----------
 function AppShell({ children }) {
   const { session } = useSession();
   const navigate = useNavigate();
 
   const builder = useMemo(() => isBuilder(session), [session]);
+
+  const canSeeCommissionerTools = useMemo(() => {
+    if (!session) return false;
+    if (isBuilder(session)) return true;
+    return canAccessCommissionerToolsFromLocalLeague(session);
+  }, [session]);
 
   function resetLeague() {
     if (!builder) return;
@@ -127,131 +161,11 @@ function AppShell({ children }) {
             <Link className="navLink" to="/home">Home</Link>
             <Link className="navLink" to="/draft">Draft</Link>
             <Link className="navLink" to="/playbook">Playbook</Link>
-            <Link className="navLink" to="/commissioner-tools">Commissioner Tools</Link>
-            <Link className="navLink" to="/achievements">Achievements</Link>
-          </nav>
 
-          <div className="topRight" style={{ display: "flex", gap: 8 }}>
-            {builder && (
-              <button
-                className="btnGhost"
-                type="button"
-                onClick={resetLeague}
-                title="Builder only"
-              >
-                Reset League
-              </button>
+            {canSeeCommissionerTools && (
+              <Link className="navLink" to="/commissioner-tools">
+                Commissioner Tools
+              </Link>
             )}
 
-            <button
-              className="btnGhost"
-              type="button"
-              onClick={async () => {
-                await supabase.auth.signOut();
-                window.location.href = "/login";
-              }}
-            >
-              Log out
-            </button>
-          </div>
-        </header>
-
-        <main style={{ marginTop: 14 }}>{children}</main>
-
-        <footer className="footer">
-          <span className="muted">Thrive Leagues • Built brick-by-brick</span>
-          <span className="muted">System first • App second</span>
-        </footer>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Routes ----------
-export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Navigate to="/home" replace />} />
-
-        <Route path="/login" element={<Login />} />
-
-        <Route
-          path="/setup"
-          element={
-            <RequireAuth>
-              <LeagueSetup />
-            </RequireAuth>
-          }
-        />
-
-        <Route
-          path="/home"
-          element={
-            <RequireAuth>
-              <RequireLeagueUnlessBuilder>
-                <AppShell>
-                  <Home />
-                </AppShell>
-              </RequireLeagueUnlessBuilder>
-            </RequireAuth>
-          }
-        />
-
-        <Route
-          path="/playbook"
-          element={
-            <RequireAuth>
-              <RequireLeagueUnlessBuilder>
-                <AppShell>
-                  <Playbook />
-                </AppShell>
-              </RequireLeagueUnlessBuilder>
-            </RequireAuth>
-          }
-        />
-
-        <Route
-          path="/draft"
-          element={
-            <RequireAuth>
-              <RequireLeagueUnlessBuilder>
-                <AppShell>
-                  <div className="pageWrap card">Draft placeholder</div>
-                </AppShell>
-              </RequireLeagueUnlessBuilder>
-            </RequireAuth>
-          }
-        />
-
-        <Route
-          path="/commissioner-tools"
-          element={
-            <RequireAuth>
-              <RequireLeagueUnlessBuilder>
-                <AppShell>
-                  <div className="pageWrap card">Commissioner tools placeholder</div>
-                </AppShell>
-              </RequireLeagueUnlessBuilder>
-            </RequireAuth>
-          }
-        />
-
-        <Route
-          path="/achievements"
-          element={
-            <RequireAuth>
-              <RequireLeagueUnlessBuilder>
-                <AppShell>
-                  <div className="pageWrap card">Achievements placeholder</div>
-                </AppShell>
-              </RequireLeagueUnlessBuilder>
-            </RequireAuth>
-          }
-        />
-
-        <Route path="*" element={<Navigate to="/home" replace />} />
-      </Routes>
-    </BrowserRouter>
-  );
-}
+            <Link className="navLink" to="/achievements">Achiev
