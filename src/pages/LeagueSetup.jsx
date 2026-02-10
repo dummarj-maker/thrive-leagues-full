@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
+import { createLeagueWithGeneratedData } from "../lib/leagueService";
+
 
 // Local storage keys (keep consistent)
 const LS_LEAGUE_KEY = "tl_league";
