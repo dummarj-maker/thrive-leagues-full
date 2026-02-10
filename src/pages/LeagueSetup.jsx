@@ -3,7 +3,6 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { createLeagueWithGeneratedData } from "../lib/leagueService";
 
-
 // Local storage keys (keep consistent)
 const LS_LEAGUE_KEY = "tl_league";
 const LS_FREE_USED_PREFIX = "tl_free_used_"; // one free league per user
@@ -154,7 +153,10 @@ export default function LeagueSetup() {
 
   const userEmail = (session?.user?.email || "").toLowerCase().trim();
   const userId = session?.user?.id || "";
-  const freeUsedKey = useMemo(() => (userId ? `${LS_FREE_USED_PREFIX}${userId}` : ""), [userId]);
+  const freeUsedKey = useMemo(
+    () => (userId ? `${LS_FREE_USED_PREFIX}${userId}` : ""),
+    [userId]
+  );
   const freeUsed = useMemo(() => {
     if (!freeUsedKey) return false;
     return localStorage.getItem(freeUsedKey) === "1";
@@ -198,7 +200,10 @@ export default function LeagueSetup() {
         isLeagueManager: true,
       });
 
-      const extra = Math.max(0, clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1);
+      const extra = Math.max(
+        0,
+        clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1
+      );
       for (let i = 0; i < extra; i++) {
         base.push({
           id: `m${i + 2}`,
@@ -219,13 +224,14 @@ export default function LeagueSetup() {
       if (!prev || prev.length === 0) return prev;
 
       const desired = clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX);
-      const commissioner = prev.find((m) => m.role === "commissioner") || {
-        id: "commissioner",
-        role: "commissioner",
-        name: safeLocalPart(userEmail) || "Commissioner",
-        email: userEmail,
-        isLeagueManager: true,
-      };
+      const commissioner =
+        prev.find((m) => m.role === "commissioner") || {
+          id: "commissioner",
+          role: "commissioner",
+          name: safeLocalPart(userEmail) || "Commissioner",
+          email: userEmail,
+          isLeagueManager: true,
+        };
 
       const existingMembers = prev.filter((m) => m.role !== "commissioner");
       const need = Math.max(0, desired - 1);
@@ -268,7 +274,10 @@ export default function LeagueSetup() {
     [membersCount, weeks, freeUsed]
   );
 
-  const price = useMemo(() => computePrice({ weeks, isFree: isFreeEligible }), [weeks, isFreeEligible]);
+  const price = useMemo(
+    () => computePrice({ weeks, isFree: isFreeEligible }),
+    [weeks, isFreeEligible]
+  );
 
   // Validation helpers
   const commissioner = members.find((m) => m.role === "commissioner");
@@ -320,7 +329,6 @@ export default function LeagueSetup() {
   }
 
   function resetLeagueLocal() {
-    // Option A: clear current league so wizard runs again
     localStorage.removeItem(LS_LEAGUE_KEY);
     setStatus({ kind: "success", msg: "League reset. You can run setup again." });
     setStepKey("basics");
@@ -330,6 +338,11 @@ export default function LeagueSetup() {
     setStatus({ kind: "loading", msg: "Activating league..." });
 
     try {
+      // Must be authed
+      if (!userId || !userEmail) {
+        throw new Error("You must be logged in to activate a league.");
+      }
+
       // Final validation
       if (!canGoNextFromBasics()) throw new Error("League name is required.");
       if (!canGoNextFromFamilySize()) throw new Error("Member count is invalid.");
@@ -337,14 +350,17 @@ export default function LeagueSetup() {
       if (!canGoNextFromWeeks()) throw new Error("Weeks selection is invalid.");
       if (!canGoNextFromDraftMode()) throw new Error("Draft mode is invalid.");
 
-      // Persist league (local for now)
+      const normalizedMembersCount = clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX);
+      const normalizedWeeks = clampInt(weeks, WEEKS_MIN, WEEKS_MAX);
+
+      // Build the local league object (bootstrap cache)
       const league = {
         id: `local_${Date.now()}`,
         createdAt: new Date().toISOString(),
         commissionerEmail: userEmail,
         leagueName: leagueName.trim(),
-        membersCount: clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX),
-        weeks: clampInt(weeks, WEEKS_MIN, WEEKS_MAX),
+        membersCount: normalizedMembersCount,
+        weeks: normalizedWeeks,
         draftMode,
         pricing: {
           model: "per_week",
@@ -360,7 +376,7 @@ export default function LeagueSetup() {
           role: m.role === "commissioner" ? "commissioner" : "member",
           displayLabel: m.role === "commissioner" ? "Commissioner" : `Member ${idx + 1}`,
           name: (m.name || "").trim(),
-          email: (m.email || "").trim(),
+          email: (m.email || "").trim(), // kept for your wizard rule; DB auth uses user_id
           isLeagueManager: !!m.isLeagueManager,
         })),
         permissions: {
@@ -368,6 +384,31 @@ export default function LeagueSetup() {
         },
       };
 
+      // Persist to Supabase + generate (ONCE) draft order + schedule
+      // Your DB schema uses league_members.user_id (uuid), so every member needs one.
+      // Commissioner uses auth.uid(); non-auth members get generated UUIDs that remain stable.
+      const membersPayload = league.members.map((m) => ({
+        user_id: m.role === "commissioner" ? userId : crypto.randomUUID(),
+        display_name: m.name,
+        role: m.role,
+        is_league_manager: m.role === "commissioner" ? true : !!m.isLeagueManager,
+        // Optional identity fields your table supports:
+        username: null,
+        pin: null,
+      }));
+
+      const created = await createLeagueWithGeneratedData({
+        name: league.leagueName,
+        commissionerEmail: userEmail,
+        draftMode: league.draftMode,
+        weeks: league.weeks,
+        members: membersPayload,
+      });
+
+      // Store authoritative leagueId for the rest of the app
+      league.leagueId = created.leagueId;
+
+      // Save local bootstrap cache
       localStorage.setItem(LS_LEAGUE_KEY, JSON.stringify(league));
 
       // Mark free as used if they just claimed free
@@ -377,8 +418,6 @@ export default function LeagueSetup() {
 
       setStatus({ kind: "success", msg: "League activated! Redirecting to Home..." });
 
-      // Route them into the app
-      // App.jsx gates /home behind league setup, so this should pass now
       setTimeout(() => {
         nav("/home", { replace: true, state: { from: location.pathname } });
       }, 500);
@@ -414,7 +453,9 @@ export default function LeagueSetup() {
           <select
             className="input"
             value={membersCount}
-            onChange={(e) => setMembersCount(clampInt(e.target.value, MEMBERS_MIN, MEMBERS_MAX))}
+            onChange={(e) =>
+              setMembersCount(clampInt(e.target.value, MEMBERS_MIN, MEMBERS_MAX))
+            }
           >
             {makeRange(MEMBERS_MIN, MEMBERS_MAX).map((n) => (
               <option key={n} value={n}>
@@ -520,7 +561,14 @@ export default function LeagueSetup() {
                 ) : null}
               </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", flexDirection: "column", alignItems: "flex-end" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                }}
+              >
                 <label
                   className={["toggleWrap", lmDisabled ? "disabled" : ""].join(" ")}
                   title={
@@ -557,16 +605,15 @@ export default function LeagueSetup() {
   }
 
   function renderWeeks() {
-    const freeBanner =
-      isFreeEligible ? (
-        <div className="notice success">
-          ✅ This league qualifies for <strong>free (ad-supported)</strong> (3 weeks, max 4 members, one free league per user).
-        </div>
-      ) : (
-        <div className="notice">
-          Paid leagues are <strong>$1 per week</strong> (no per-user fee). Payment comes at the end.
-        </div>
-      );
+    const freeBanner = isFreeEligible ? (
+      <div className="notice success">
+        ✅ This league qualifies for <strong>free (ad-supported)</strong> (3 weeks, max 4 members, one free league per user).
+      </div>
+    ) : (
+      <div className="notice">
+        Paid leagues are <strong>$1 per week</strong> (no per-user fee). Payment comes at the end.
+      </div>
+    );
 
     return (
       <Card title="League length" right={<Pill>Step 4</Pill>}>
@@ -609,9 +656,7 @@ export default function LeagueSetup() {
               onChange={() => setDraftMode("self")}
             />
             <div className="radioTitle">Draft your own challenges</div>
-            <div className="radioDesc muted">
-              Each member selects their own challenge category.
-            </div>
+            <div className="radioDesc muted">Each member selects their own challenge category.</div>
           </label>
 
           <label className={["radioCard", draftMode === "other" ? "active" : ""].join(" ")}>
@@ -678,7 +723,8 @@ export default function LeagueSetup() {
             </div>
           ) : (
             <div className="notice">
-              Total today: <strong>${price}</strong> <span className="muted">(${1}/week × {weeks} weeks)</span>
+              Total today: <strong>${price}</strong>{" "}
+              <span className="muted">(${1}/week × {weeks} weeks)</span>
               <div className="muted" style={{ marginTop: 6 }}>
                 Payment wiring will be added in the Activate step later. For now, we store your league config and proceed.
               </div>
@@ -697,7 +743,12 @@ export default function LeagueSetup() {
         </div>
 
         <div style={{ marginTop: 12 }}>
-          <button className="btnPrimary" type="button" onClick={activateLeague} disabled={status.kind === "loading"}>
+          <button
+            className="btnPrimary"
+            type="button"
+            onClick={activateLeague}
+            disabled={status.kind === "loading"}
+          >
             Activate League
           </button>
 
@@ -711,8 +762,16 @@ export default function LeagueSetup() {
           </button>
         </div>
 
-        {status.kind === "error" ? <div className="helper errorText" style={{ marginTop: 10 }}>{status.msg}</div> : null}
-        {status.kind === "success" ? <div className="helper" style={{ marginTop: 10 }}>{status.msg}</div> : null}
+        {status.kind === "error" ? (
+          <div className="helper errorText" style={{ marginTop: 10 }}>
+            {status.msg}
+          </div>
+        ) : null}
+        {status.kind === "success" ? (
+          <div className="helper" style={{ marginTop: 10 }}>
+            {status.msg}
+          </div>
+        ) : null}
       </Card>
     );
   }
@@ -786,7 +845,11 @@ export default function LeagueSetup() {
       </div>
 
       {/* Status */}
-      {status.kind === "error" ? <div className="helper errorText" style={{ marginTop: 10 }}>{status.msg}</div> : null}
+      {status.kind === "error" ? (
+        <div className="helper errorText" style={{ marginTop: 10 }}>
+          {status.msg}
+        </div>
+      ) : null}
     </div>
   );
 }
