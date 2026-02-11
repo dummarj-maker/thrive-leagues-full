@@ -11,16 +11,32 @@ import {
 
 import Home from "./Home.jsx";
 import Playbook from "./Playbook.jsx";
+import Draft from "./Draft.jsx";
+import CommissionerTools from "./CommissionerTools.jsx";
 import Login from "./pages/Login.jsx";
 import LeagueSetup from "./pages/LeagueSetup.jsx";
-import CommissionerTools from "./pages/CommissionerTools.jsx";
 
 import { supabase } from "./lib/supabaseClient";
-import { canAccessCommissionerToolsFromLocalLeague } from "./lib/permissions";
 
 // ---------- Helpers ----------
+function readLocalLeague() {
+  try {
+    const raw = localStorage.getItem("tl_league");
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 function hasLeagueConfigured() {
-  return !!localStorage.getItem("tl_league");
+  const l = readLocalLeague();
+  return !!l;
+}
+
+function getLeagueId() {
+  const l = readLocalLeague();
+  return l?.leagueId || null;
 }
 
 const BUILDER_EMAIL = (import.meta.env.VITE_BUILDER_EMAIL || "")
@@ -62,6 +78,70 @@ function isBuilder(session) {
   return !!BUILDER_EMAIL && email === BUILDER_EMAIL;
 }
 
+function isLeagueAdminRow(row) {
+  if (!row) return false;
+  return row.role === "commissioner" || row.is_league_manager === true;
+}
+
+function useLeagueAdminAccess() {
+  const { session, ready } = useSession();
+  const [allowed, setAllowed] = useState(false);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function run() {
+      if (!ready) return;
+      const leagueId = getLeagueId();
+
+      if (!session || !leagueId) {
+        if (!ignore) {
+          setAllowed(false);
+          setChecking(false);
+        }
+        return;
+      }
+
+      // Builder gets access for debugging
+      if (isBuilder(session)) {
+        if (!ignore) {
+          setAllowed(true);
+          setChecking(false);
+        }
+        return;
+      }
+
+      setChecking(true);
+      const { data, error } = await supabase
+        .from("league_members")
+        .select("role,is_league_manager")
+        .eq("league_id", leagueId)
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+
+      if (!ignore) {
+        if (error) {
+          console.error(error);
+          setAllowed(false);
+          setChecking(false);
+          return;
+        }
+        setAllowed(isLeagueAdminRow(data));
+        setChecking(false);
+      }
+    }
+
+    run();
+
+    return () => {
+      ignore = true;
+    };
+  }, [session, ready]);
+
+  return { allowed, checking };
+}
+
 // ---------- Guards ----------
 function RequireAuth({ children }) {
   const location = useLocation();
@@ -89,29 +169,19 @@ function RequireLeagueUnlessBuilder({ children }) {
   return children;
 }
 
-function RequireCommissionerToolsAccess({ children }) {
-  const location = useLocation();
-  const { session, ready } = useSession();
-
-  if (!ready) return null;
-  if (!session) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  }
-
-  // Builder override (consistent with your app)
-  if (isBuilder(session)) return children;
-
-  // Must have league configured
-  if (!hasLeagueConfigured()) {
-    return <Navigate to="/setup" replace state={{ from: location.pathname }} />;
-  }
-
-  // Local-league based permissions (Stage 2)
-  const allowed = canAccessCommissionerToolsFromLocalLeague(session);
+function RequireLeagueAdmin({ children }) {
+  const { allowed, checking } = useLeagueAdminAccess();
+  if (checking) return null;
   if (!allowed) {
-    return <Navigate to="/home" replace />;
+    return (
+      <div className="pageWrap card">
+        <h3 style={{ marginTop: 0 }}>No access</h3>
+        <p className="muted">
+          Only the commissioner and selected league managers can use Commissioner Tools.
+        </p>
+      </div>
+    );
   }
-
   return children;
 }
 
@@ -119,26 +189,21 @@ function RequireCommissionerToolsAccess({ children }) {
 function AppShell({ children }) {
   const { session } = useSession();
   const navigate = useNavigate();
+  const { allowed: adminAllowed, checking: adminChecking } = useLeagueAdminAccess();
 
   const builder = useMemo(() => isBuilder(session), [session]);
-
-  const canSeeCommissionerTools = useMemo(() => {
-    if (!session) return false;
-    if (isBuilder(session)) return true;
-    return canAccessCommissionerToolsFromLocalLeague(session);
-  }, [session]);
 
   function resetLeague() {
     if (!builder) return;
 
     const ok = window.confirm(
-      "Reset this league and return to setup?\n\n(This only affects your local league state.)"
+      "Reset this league and return to setup?\n\n(This affects your local league state.)"
     );
 
     if (!ok) return;
 
     localStorage.removeItem("tl_league");
-    localStorage.removeItem("tl_wizard"); // optional future-proofing
+    localStorage.removeItem("tl_wizard");
 
     navigate("/setup", { replace: true });
   }
@@ -151,9 +216,7 @@ function AppShell({ children }) {
             <div className="brandMark">TL</div>
             <div>
               <div className="brandName">Thrive Leagues</div>
-              <div className="brandSub">
-                {builder ? "Builder Mode" : "Family League"}
-              </div>
+              <div className="brandSub">{builder ? "Builder Mode" : "Family League"}</div>
             </div>
           </div>
 
@@ -162,11 +225,10 @@ function AppShell({ children }) {
             <Link className="navLink" to="/draft">Draft</Link>
             <Link className="navLink" to="/playbook">Playbook</Link>
 
-            {canSeeCommissionerTools && (
-              <Link className="navLink" to="/commissioner-tools">
-                Commissioner Tools
-              </Link>
-            )}
+            {/* Only show Commissioner Tools if admin (or builder) */}
+            {!adminChecking && adminAllowed ? (
+              <Link className="navLink" to="/commissioner-tools">Commissioner Tools</Link>
+            ) : null}
 
             <Link className="navLink" to="/achievements">Achievements</Link>
           </nav>
@@ -257,7 +319,7 @@ export default function App() {
             <RequireAuth>
               <RequireLeagueUnlessBuilder>
                 <AppShell>
-                  <div className="pageWrap card">Draft placeholder</div>
+                  <Draft />
                 </AppShell>
               </RequireLeagueUnlessBuilder>
             </RequireAuth>
@@ -267,11 +329,15 @@ export default function App() {
         <Route
           path="/commissioner-tools"
           element={
-            <RequireCommissionerToolsAccess>
-              <AppShell>
-                <CommissionerTools />
-              </AppShell>
-            </RequireCommissionerToolsAccess>
+            <RequireAuth>
+              <RequireLeagueUnlessBuilder>
+                <AppShell>
+                  <RequireLeagueAdmin>
+                    <CommissionerTools />
+                  </RequireLeagueAdmin>
+                </AppShell>
+              </RequireLeagueUnlessBuilder>
+            </RequireAuth>
           }
         />
 
