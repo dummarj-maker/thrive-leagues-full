@@ -6,25 +6,7 @@ function safeEmail(x) {
   return (x || "").toLowerCase().trim();
 }
 
-function safeText(x) {
-  return (x || "").trim();
-}
-
-function normalizeRole(role) {
-  const r = (role || "").toLowerCase().trim();
-  // DB check constraint expects ONLY these two values
-  if (r === "commissioner") return "commissioner";
-  return "member";
-}
-
-async function getCurrentUserId() {
-  const { data, error } = await supabase.auth.getUser();
-  if (error) throw error;
-  return data?.user?.id || null;
-}
-
 async function hashPin(pin) {
-  // Stage 2 simple hashing. Never store raw pin.
   if (!pin) return null;
   const enc = new TextEncoder().encode(pin);
   const buf = await crypto.subtle.digest("SHA-256", enc);
@@ -38,98 +20,78 @@ export async function createLeagueWithGeneratedData({
   commissionerEmail,
   draftMode,
   weeks,
-  members, // can be mixed: auth user(s) + non-auth placeholder members
+  members,
 }) {
   const commEmail = safeEmail(commissionerEmail);
-  const leagueName = safeText(name);
 
   if (!commEmail) throw new Error("Missing commissioner email.");
-  if (!leagueName) throw new Error("Missing league name.");
-  if (!weeks || Number(weeks) < 1) throw new Error("Weeks must be >= 1.");
+  if (!name?.trim()) throw new Error("Missing league name.");
+  if (!weeks || weeks < 1) throw new Error("Weeks must be >= 1.");
 
-  const normalizedDraftMode = (draftMode || "").toLowerCase().trim();
-
-  // 0) Current logged-in user becomes league owner + commissioner user_id (when available)
-  const ownerId = await getCurrentUserId();
-  if (!ownerId) throw new Error("No logged-in user found. Please log in again.");
-
-  // 1) Insert league (owner_id is REQUIRED in your schema)
-  const { data: league, error: leagueErr } = await supabase
+  // 🔹 1. Insert League
+  const {
+    data: league,
+    error: leagueErr,
+  } = await supabase
     .from("leagues")
     .insert({
-      name: leagueName,
-      commissioner_email: commEmail,
-      weeks: Number(weeks),
-      draft_mode: normalizedDraftMode,
-      owner_id: ownerId,
+      name: name.trim(),
+      owner_id: (await supabase.auth.getUser()).data.user.id, // REQUIRED
+      weeks,
+      draft_mode: draftMode,
     })
     .select()
     .single();
 
   if (leagueErr) throw leagueErr;
 
-  // 2) Insert league members
+  // 🔹 2. Normalize Role to MATCH DB constraint
+  function normalizeRole(role) {
+    const r = (role || "").toLowerCase().trim();
+    if (r === "commissioner") return "commissioner";
+    return "player"; // <-- MUST be "player" (not member)
+  }
+
   const memberRows = [];
 
-  for (const m of members || []) {
-    const displayName =
-      safeText(m.display_name) ||
-      safeText(m.displayName) ||
-      safeText(m.name) ||
-      "Member";
+  for (const m of members) {
+    if (!m.user_id) throw new Error("Every member must have a user_id.");
 
-    const role = normalizeRole(m.role);
-
-    // Commissioner: always tie to ownerId unless explicitly provided
-    const userId =
-      role === "commissioner"
-        ? (m.user_id || m.userId || ownerId)
-        : (m.user_id || m.userId || null);
-
-    const username = safeText(m.username) || null;
-
-    const wantsLM =
-      role === "commissioner" ? true : !!(m.is_league_manager ?? m.isLeagueManager);
-
-    const pin = safeText(m.pin) || null;
-    const pinHash = pin ? await hashPin(pin) : null;
+    const normalizedRole = normalizeRole(m.role);
+    const wantsLM = !!m.is_league_manager;
 
     const row = {
       league_id: league.id,
-      user_id: userId, // can be null for non-auth members if schema allows
-      display_name: displayName,
-      role, // ONLY 'commissioner' or 'member'
-      is_league_manager: wantsLM, // ✅ INSERTED HERE
-      username,
-      pin_hash: pinHash,
+      user_id: m.user_id,
+      display_name: (m.display_name || "").trim() || "Member",
+      role: normalizedRole,
+      username: m.username || null,
+      pin_hash: m.pin ? await hashPin(m.pin) : null,
     };
+
+    // Commissioner is always LM
+    if (normalizedRole === "commissioner") {
+      row.is_league_manager = true;
+    } else {
+      row.is_league_manager = wantsLM;
+    }
 
     memberRows.push(row);
   }
 
-  // Safety: ensure commissioner row exists
-  if (!memberRows.some((r) => r.role === "commissioner")) {
-    memberRows.unshift({
-      league_id: league.id,
-      user_id: ownerId,
-      display_name: "Commissioner",
-      role: "commissioner",
-      is_league_manager: true,
-      username: null,
-      pin_hash: null,
-    });
-  }
-
-  const { data: insertedMembers, error: membersErr } = await supabase
+  const {
+    data: insertedMembers,
+    error: membersErr,
+  } = await supabase
     .from("league_members")
     .insert(memberRows)
     .select();
 
   if (membersErr) throw membersErr;
 
-  // 3) Draft order generation uses league_members.id (UUID PK)
-  const memberIds = insertedMembers.map((x) => x.id);
-  const seedString = `${league.id}:${league.created_at || ""}:${commEmail}`;
+  // 🔹 3. Draft Order
+  const memberIds = insertedMembers.map((m) => m.id);
+  const seedString = `${league.id}:${league.created_at}:${commEmail}`;
   const draft = generateDraftOrder(memberIds, { seedString });
 
   const draftRows = draft.map((d) => ({
@@ -138,11 +100,14 @@ export async function createLeagueWithGeneratedData({
     draft_position: d.draft_position,
   }));
 
-  const { error: draftErr } = await supabase.from("draft_order").insert(draftRows);
+  const { error: draftErr } = await supabase
+    .from("draft_order")
+    .insert(draftRows);
+
   if (draftErr) throw draftErr;
 
-  // 4) Schedule generation
-  const schedule = generateRoundRobinSchedule(memberIds, Number(weeks));
+  // 🔹 4. Schedule
+  const schedule = generateRoundRobinSchedule(memberIds, weeks);
 
   const scheduleRows = schedule.map((s) => ({
     league_id: league.id,
