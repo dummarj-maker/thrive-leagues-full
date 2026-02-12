@@ -69,8 +69,6 @@ export async function createLeagueWithGeneratedData({
   if (leagueErr) throw leagueErr;
 
   // 2) Insert league members
-  // IMPORTANT: Your DB enforces role values via check constraint.
-  // Also: do NOT require user_id for everyone; only commissioner is guaranteed to be authed.
   const memberRows = [];
 
   for (const m of members || []) {
@@ -90,28 +88,21 @@ export async function createLeagueWithGeneratedData({
 
     const username = safeText(m.username) || null;
 
-    // Accept both is_league_manager and isLeagueManager, but ONLY insert if your table has the column.
-    // If your league_members table does NOT have is_league_manager, Supabase will error on insert.
-    // So we build rows without it by default, and only include it if you confirm the column exists.
     const wantsLM =
       role === "commissioner" ? true : !!(m.is_league_manager ?? m.isLeagueManager);
 
     const pin = safeText(m.pin) || null;
     const pinHash = pin ? await hashPin(pin) : null;
 
-    // Build base row using ONLY columns we know you have from your screenshot:
-    // id, league_id, user_id, display_name, role, username, pin_hash, created_at
     const row = {
       league_id: league.id,
       user_id: userId, // can be null for non-auth members if schema allows
       display_name: displayName,
-      role,
+      role, // ONLY 'commissioner' or 'member'
+      is_league_manager: wantsLM, // ✅ INSERTED HERE
       username,
       pin_hash: pinHash,
     };
-
-    // ⚠️ If you HAVE added is_league_manager to league_members, uncomment this line:
-    // row.is_league_manager = wantsLM;
 
     memberRows.push(row);
   }
@@ -121,11 +112,11 @@ export async function createLeagueWithGeneratedData({
     memberRows.unshift({
       league_id: league.id,
       user_id: ownerId,
-      display_name: safeText(members?.[0]?.display_name) || "Commissioner",
+      display_name: "Commissioner",
       role: "commissioner",
+      is_league_manager: true,
       username: null,
       pin_hash: null,
-      // is_league_manager: true, // if/when column exists
     });
   }
 
