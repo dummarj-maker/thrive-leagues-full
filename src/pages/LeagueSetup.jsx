@@ -3,11 +3,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { createLeagueWithGeneratedData } from "../lib/leagueService";
-import { setActiveLeague } from "../lib/leagueStore";
+import { setActiveLeague, clearActiveLeague } from "../lib/leagueStore";
 
 // Local storage keys (keep consistent)
 const LS_LEAGUE_KEY = "tl_league";
-const LS_FREE_USED_PREFIX = "tl_free_used_"; // one free league per user
 
 const MEMBERS_MIN = 3;
 const MEMBERS_MAX = 12;
@@ -70,11 +69,7 @@ function StepPills({ currentKey }) {
         return (
           <span
             key={s.key}
-            className={[
-              "wizardPill",
-              done ? "done" : "",
-              active ? "active" : "",
-            ]
+            className={["wizardPill", done ? "done" : "", active ? "active" : ""]
               .filter(Boolean)
               .join(" ")}
           >
@@ -85,22 +80,6 @@ function StepPills({ currentKey }) {
       })}
     </div>
   );
-}
-
-function computeIsFreeEligible({ membersCount, weeks, freeUsed }) {
-  // Free rules:
-  // - 3-week leagues only
-  // - max 4 members
-  // - one free league per user
-  return weeks === 3 && membersCount <= 4 && !freeUsed;
-}
-
-function computePrice({ weeks, isFree }) {
-  // Pricing rule:
-  // - $1 per week
-  // - no per-user fee
-  if (isFree) return 0;
-  return Number(weeks) * 1;
 }
 
 export default function LeagueSetup() {
@@ -120,17 +99,11 @@ export default function LeagueSetup() {
   const [weeks, setWeeks] = useState(3);
 
   // Draft mode
-  // "self" = draft your own challenges
-  // "other" = family drafts others' challenges
   const [draftMode, setDraftMode] = useState("self");
 
   // Member list objects:
-  // { id, role: "commissioner"|"member", name, email, isLeagueManager }
-  //
-  // NOTE (Stage 2 wiring):
-  // Only the commissioner is guaranteed to have a Supabase auth.user.id.
-  // We'll create the league + commissioner membership now,
-  // and add the "invite/join" brick for League Managers next.
+  // NOTE: DB can only create commissioner right now (FK requires real auth users).
+  // We still collect names/emails for future "Invite / Join" brick.
   const [members, setMembers] = useState([]);
 
   // UI status
@@ -161,18 +134,10 @@ export default function LeagueSetup() {
   const userEmail = (session?.user?.email || "").toLowerCase().trim();
   const userId = session?.user?.id || "";
 
-  const freeUsedKey = useMemo(
-    () => (userId ? `${LS_FREE_USED_PREFIX}${userId}` : ""),
-    [userId]
-  );
-
-  const freeUsed = useMemo(() => {
-    if (!freeUsedKey) return false;
-    return localStorage.getItem(freeUsedKey) === "1";
-  }, [freeUsedKey]);
-
   // Seed defaults once session is available
   useEffect(() => {
+    if (!session) return;
+
     const commissionerName =
       session?.user?.user_metadata?.full_name?.trim?.() ||
       session?.user?.user_metadata?.name?.trim?.() ||
@@ -204,11 +169,7 @@ export default function LeagueSetup() {
         isLeagueManager: true,
       });
 
-      const extra = Math.max(
-        0,
-        clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1
-      );
-
+      const extra = Math.max(0, clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1);
       for (let i = 0; i < extra; i++) {
         base.push({
           id: `m${i + 2}`,
@@ -218,26 +179,24 @@ export default function LeagueSetup() {
           isLeagueManager: false,
         });
       }
-
       return base;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // When membersCount changes, resize array (keep commissioner intact)
+  // Resize array when membersCount changes
   useEffect(() => {
     setMembers((prev) => {
       if (!prev || prev.length === 0) return prev;
 
       const desired = clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX);
-      const commissioner =
-        prev.find((m) => m.role === "commissioner") || {
-          id: "commissioner",
-          role: "commissioner",
-          name: safeLocalPart(userEmail) || "Commissioner",
-          email: userEmail,
-          isLeagueManager: true,
-        };
+      const commissioner = prev.find((m) => m.role === "commissioner") || {
+        id: "commissioner",
+        role: "commissioner",
+        name: safeLocalPart(userEmail) || "Commissioner",
+        email: userEmail,
+        isLeagueManager: true,
+      };
 
       const existingMembers = prev.filter((m) => m.role !== "commissioner");
       const need = Math.max(0, desired - 1);
@@ -258,7 +217,7 @@ export default function LeagueSetup() {
     });
   }, [membersCount, userEmail]);
 
-  // LM toggle rule: must have email; if email removed, force LM off
+  // LM toggle rule: must have email
   useEffect(() => {
     setMembers((prev) =>
       prev.map((m) => {
@@ -266,24 +225,13 @@ export default function LeagueSetup() {
           return { ...m, email: userEmail || m.email || "", isLeagueManager: true };
         }
         const hasEmail = !!(m.email || "").trim();
-        if (!hasEmail && m.isLeagueManager) {
-          return { ...m, isLeagueManager: false };
-        }
+        if (!hasEmail && m.isLeagueManager) return { ...m, isLeagueManager: false };
         return m;
       })
     );
   }, [userEmail]);
 
-  const isFreeEligible = useMemo(
-    () => computeIsFreeEligible({ membersCount, weeks, freeUsed }),
-    [membersCount, weeks, freeUsed]
-  );
-
-  const price = useMemo(
-    () => computePrice({ weeks, isFree: isFreeEligible }),
-    [weeks, isFreeEligible]
-  );
-
+  // Validation helpers
   const commissioner = members.find((m) => m.role === "commissioner");
   const membersOnly = members.filter((m) => m.role !== "commissioner");
 
@@ -331,10 +279,8 @@ export default function LeagueSetup() {
   }
 
   function resetLeagueLocal() {
-    // Clears local setup marker + active league id
     localStorage.removeItem(LS_LEAGUE_KEY);
-    // active league id is stored separately
-    // (we keep this simple: user can also reset in Builder Mode)
+    clearActiveLeague();
     setStatus({ kind: "success", msg: "League reset. You can run setup again." });
     setStepKey("basics");
   }
@@ -344,9 +290,7 @@ export default function LeagueSetup() {
 
     try {
       // Must be authed
-      if (!userId || !userEmail) {
-        throw new Error("You must be logged in to activate a league.");
-      }
+      if (!userId || !userEmail) throw new Error("You must be logged in to activate a league.");
 
       // Final validation
       if (!canGoNextFromBasics()) throw new Error("League name is required.");
@@ -355,85 +299,48 @@ export default function LeagueSetup() {
       if (!canGoNextFromWeeks()) throw new Error("Weeks selection is invalid.");
       if (!canGoNextFromDraftMode()) throw new Error("Draft mode is invalid.");
 
-      const normalizedMembersCount = clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX);
-      const normalizedWeeks = clampInt(weeks, WEEKS_MIN, WEEKS_MAX);
+      // IMPORTANT: DB can only insert commissioner right now (auth FK).
+      // We still pass the full list for future bricks, but service will insert commissioner only.
+      const payloadMembers = members.map((m) => ({
+        user_id: m.role === "commissioner" ? userId : null,
+        display_name: (m.name || "").trim(),
+        role: m.role === "commissioner" ? "commissioner" : "participant",
+        is_league_manager: m.role === "commissioner" ? true : !!m.isLeagueManager,
+        username: null,
+        pin: null,
+        email: (m.email || "").trim() || null,
+      }));
 
-      // ---- Stage 2: DB-backed league creation (commissioner only) ----
-      //
-      // Why commissioner-only?
-      // Your league_members.user_id is a REQUIRED foreign key.
-      // Only the logged-in commissioner is guaranteed to have a real user_id right now.
-      //
-      // Next brick will add: “League Manager join flow” so selected LMs can log in and attach.
       const result = await createLeagueWithGeneratedData({
         name: leagueName.trim(),
         commissionerEmail: userEmail,
         draftMode,
-        weeks: normalizedWeeks,
-        members: [
-          {
-            user_id: userId,
-            display_name: (commissioner?.name || "Commissioner").trim(),
-            role: "commissioner",
-            username: null,
-            pin: null,
-            is_league_manager: true,
-          },
-        ],
+        weeks: clampInt(weeks, WEEKS_MIN, WEEKS_MAX),
+        members: payloadMembers,
       });
 
-      const leagueId = result?.leagueId || result?.league?.id;
-      if (!leagueId) {
-        throw new Error("League created but no leagueId was returned.");
-      }
+      // Activation Hook (this is the missing wiring)
+      setActiveLeague(result.leagueId);
 
-      // ✅ STEP 2 ACTIVATION HOOK
-      setActiveLeague(leagueId);
-
-      // Keep your existing App.jsx guard working (it checks tl_league exists)
-      const bootstrapLeague = {
-        id: leagueId,
-        createdAt: new Date().toISOString(),
-        commissionerEmail: userEmail,
-        leagueName: leagueName.trim(),
-        membersCount: normalizedMembersCount,
-        weeks: normalizedWeeks,
-        draftMode,
-        pricing: {
-          model: "per_week",
-          perWeek: 1,
-          isFreeEligible,
-          priceTotal: price,
-          note: isFreeEligible
-            ? "Free (ad-supported) — 3 weeks, max 4 members, one free league per user."
-            : "$1 per week (no user fee).",
-        },
-        // store the “planned members” locally for now (join flow comes next)
-        plannedMembers: members.map((m, idx) => ({
-          order: idx + 1,
-          role: m.role === "commissioner" ? "commissioner" : "member",
-          name: (m.name || "").trim(),
-          email: (m.email || "").trim(),
-          isLeagueManager: !!m.isLeagueManager,
-        })),
-      };
-
-      localStorage.setItem(LS_LEAGUE_KEY, JSON.stringify(bootstrapLeague));
-
-      if (isFreeEligible && freeUsedKey) {
-        localStorage.setItem(freeUsedKey, "1");
-      }
+      // Optional local cache (Stage 2 convenience)
+      localStorage.setItem(
+        LS_LEAGUE_KEY,
+        JSON.stringify({
+          leagueId: result.leagueId,
+          leagueName: leagueName.trim(),
+          commissionerEmail: userEmail,
+          weeks: clampInt(weeks, WEEKS_MIN, WEEKS_MAX),
+          draftMode,
+        })
+      );
 
       setStatus({ kind: "success", msg: "League activated! Redirecting to Home..." });
 
       setTimeout(() => {
         nav("/home", { replace: true, state: { from: location.pathname } });
-      }, 300);
+      }, 350);
     } catch (e) {
-      setStatus({
-        kind: "error",
-        msg: e?.message || "Could not activate league.",
-      });
+      setStatus({ kind: "error", msg: e?.message || "Could not activate league." });
     }
   }
 
@@ -464,9 +371,7 @@ export default function LeagueSetup() {
           <select
             className="input"
             value={membersCount}
-            onChange={(e) =>
-              setMembersCount(clampInt(e.target.value, MEMBERS_MIN, MEMBERS_MAX))
-            }
+            onChange={(e) => setMembersCount(clampInt(e.target.value, MEMBERS_MIN, MEMBERS_MAX))}
           >
             {makeRange(MEMBERS_MIN, MEMBERS_MAX).map((n) => (
               <option key={n} value={n}>
@@ -483,15 +388,8 @@ export default function LeagueSetup() {
   function renderMembers() {
     return (
       <Card title="Add members" right={<Pill>Step 3</Pill>}>
-        <div className="notice" style={{ marginBottom: 12 }}>
-          <strong>Stage 2 note:</strong> Only the commissioner is created in the database right now (because
-          the database requires a real user ID). We still collect names/emails here, and the next brick will
-          let League Managers log in and join this league.
-        </div>
-
         <div className="muted" style={{ marginBottom: 10 }}>
-          Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an
-          email.
+          Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an email.
         </div>
 
         <div className="membersGridHeader">
@@ -515,9 +413,7 @@ export default function LeagueSetup() {
               value={commissioner?.name || ""}
               onChange={(e) => {
                 const v = e.target.value;
-                setMembers((prev) =>
-                  prev.map((m) => (m.role === "commissioner" ? { ...m, name: v } : m))
-                );
+                setMembers((prev) => prev.map((m) => (m.role === "commissioner" ? { ...m, name: v } : m)));
               }}
               placeholder="Commissioner name"
             />
@@ -573,21 +469,10 @@ export default function LeagueSetup() {
                 ) : null}
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  flexDirection: "column",
-                  alignItems: "flex-end",
-                }}
-              >
+              <div style={{ display: "flex", justifyContent: "flex-end", flexDirection: "column", alignItems: "flex-end" }}>
                 <label
                   className={["toggleWrap", lmDisabled ? "disabled" : ""].join(" ")}
-                  title={
-                    lmDisabled
-                      ? "Add an email address to enable League Manager."
-                      : "League Managers can score matchups and enter points for everyone."
-                  }
+                  title={lmDisabled ? "Add an email address to enable League Manager." : "League Managers can enter points."}
                 >
                   <input
                     type="checkbox"
@@ -613,20 +498,10 @@ export default function LeagueSetup() {
   }
 
   function renderWeeks() {
-    const freeBanner = isFreeEligible ? (
-      <div className="notice success">
-        ✅ This league qualifies for <strong>free (ad-supported)</strong> (3 weeks, max 4 members, one free
-        league per user).
-      </div>
-    ) : (
-      <div className="notice">
-        Paid leagues are <strong>$1 per week</strong> (no per-user fee). Payment comes at the end.
-      </div>
-    );
-
     return (
       <Card title="League length" right={<Pill>Step 4</Pill>}>
-        {freeBanner}
+        <div className="notice">Paid leagues are <strong>$1 per week</strong> (no per-user fee). Payment comes later.</div>
+
         <div className="field" style={{ marginTop: 10 }}>
           <label className="label">How many weeks will this league run? (3–12)</label>
           <select
@@ -640,9 +515,6 @@ export default function LeagueSetup() {
               </option>
             ))}
           </select>
-          <div className="helper muted">
-            Free leagues must be <strong>3 weeks</strong> and <strong>max 4 members</strong>.
-          </div>
         </div>
       </Card>
     );
@@ -657,25 +529,13 @@ export default function LeagueSetup() {
 
         <div className="radioGrid">
           <label className={["radioCard", draftMode === "self" ? "active" : ""].join(" ")}>
-            <input
-              type="radio"
-              name="draftMode"
-              value="self"
-              checked={draftMode === "self"}
-              onChange={() => setDraftMode("self")}
-            />
+            <input type="radio" name="draftMode" value="self" checked={draftMode === "self"} onChange={() => setDraftMode("self")} />
             <div className="radioTitle">Draft your own challenges</div>
             <div className="radioDesc muted">Each member selects their own challenge category.</div>
           </label>
 
           <label className={["radioCard", draftMode === "other" ? "active" : ""].join(" ")}>
-            <input
-              type="radio"
-              name="draftMode"
-              value="other"
-              checked={draftMode === "other"}
-              onChange={() => setDraftMode("other")}
-            />
+            <input type="radio" name="draftMode" value="other" checked={draftMode === "other"} onChange={() => setDraftMode("other")} />
             <div className="radioTitle">Draft other members’ challenges</div>
             <div className="radioDesc muted">Members draft categories for someone else (more strategy + fun).</div>
           </label>
@@ -707,35 +567,12 @@ export default function LeagueSetup() {
             <div className="muted">Draft mode</div>
             <div>{draftMode === "self" ? "Draft your own challenges" : "Draft other members’ challenges"}</div>
           </div>
-
-          <div className="reviewItem">
-            <div className="muted">Commissioner</div>
-            <div>
-              {commissioner?.name} <span className="muted">({userEmail})</span>
-            </div>
-          </div>
-
-          <div className="reviewItem">
-            <div className="muted">League managers</div>
-            <div>
-              {members.filter((m) => m.isLeagueManager).map((m) => m.name || "Unnamed").join(", ") || "None"}
-            </div>
-          </div>
         </div>
 
-        <div style={{ marginTop: 14 }}>
-          {isFreeEligible ? (
-            <div className="notice success">
-              ✅ Eligible for <strong>free (ad-supported)</strong>. Total today: <strong>$0</strong>
-            </div>
-          ) : (
-            <div className="notice">
-              Total today: <strong>${price}</strong> <span className="muted">(${1}/week × {weeks} weeks)</span>
-              <div className="muted" style={{ marginTop: 6 }}>
-                Payment wiring will be added in the Activate step later. For now, we store your league config and proceed.
-              </div>
-            </div>
-          )}
+        <div className="notice" style={{ marginTop: 14 }}>
+          <strong>Important:</strong> Due to security + database constraints, only users who already have accounts can be inserted into the league right now.
+          <br />
+          In this brick, we’ll create the league + commissioner. Next brick will be “Invite / Join League” so your family members appear here automatically.
         </div>
       </Card>
     );
@@ -744,14 +581,11 @@ export default function LeagueSetup() {
   function renderActivate() {
     return (
       <Card title="Activate" right={<Pill>Step 7</Pill>}>
-        <div className="notice">
-          When you activate, we create the league in the database, generate the draft order + schedule once,
-          set the active league, and send you to Home.
-        </div>
+        <div className="notice">When you activate, we save this league setup and send you to the league home.</div>
 
         <div style={{ marginTop: 12 }}>
           <button className="btnPrimary" type="button" onClick={activateLeague} disabled={status.kind === "loading"}>
-            {status.kind === "loading" ? "Activating..." : "Activate League"}
+            Activate League
           </button>
 
           <button className="btnGhost" type="button" onClick={resetLeagueLocal} style={{ marginLeft: 10 }}>
@@ -759,17 +593,8 @@ export default function LeagueSetup() {
           </button>
         </div>
 
-        {status.kind === "error" ? (
-          <div className="helper errorText" style={{ marginTop: 10 }}>
-            {status.msg}
-          </div>
-        ) : null}
-
-        {status.kind === "success" ? (
-          <div className="helper" style={{ marginTop: 10 }}>
-            {status.msg}
-          </div>
-        ) : null}
+        {status.kind === "error" ? <div className="helper errorText" style={{ marginTop: 10 }}>{status.msg}</div> : null}
+        {status.kind === "success" ? <div className="helper" style={{ marginTop: 10 }}>{status.msg}</div> : null}
       </Card>
     );
   }
@@ -839,11 +664,7 @@ export default function LeagueSetup() {
         </div>
       </div>
 
-      {status.kind === "error" ? (
-        <div className="helper errorText" style={{ marginTop: 10 }}>
-          {status.msg}
-        </div>
-      ) : null}
+      {status.kind === "error" ? <div className="helper errorText" style={{ marginTop: 10 }}>{status.msg}</div> : null}
     </div>
   );
 }
