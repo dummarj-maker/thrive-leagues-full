@@ -3,10 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { createLeagueWithGeneratedData } from "../lib/leagueService";
-import { setActiveLeague, clearActiveLeague } from "../lib/leagueStore";
-
-// Local storage keys (keep consistent)
-const LS_LEAGUE_KEY = "tl_league";
+import { setActiveLeague } from "../lib/leagueStore";
 
 const MEMBERS_MIN = 3;
 const MEMBERS_MAX = 12;
@@ -82,34 +79,30 @@ function StepPills({ currentKey }) {
   );
 }
 
+/**
+ * MEMBER MODEL (wizard)
+ * We’ll store “LM wants login” as isLeagueManager.
+ * - Commissioner ALWAYS LM and logged in
+ * - Other LMs: must log in later => we require user_id before activation IF LM checked
+ * - Non-LM members can be PIN-based => no user_id required
+ */
 export default function LeagueSetup() {
   const nav = useNavigate();
   const location = useLocation();
 
   const [session, setSession] = useState(null);
-
-  // Step state
-  const [stepKey, setStepKey] = useState("basics");
-
-  // League basics
-  const [leagueName, setLeagueName] = useState("");
-
-  // Config
-  const [membersCount, setMembersCount] = useState(4);
-  const [weeks, setWeeks] = useState(3);
-
-  // Draft mode
-  const [draftMode, setDraftMode] = useState("self");
-
-  // Member list objects:
-  // NOTE: DB can only create commissioner right now (FK requires real auth users).
-  // We still collect names/emails for future "Invite / Join" brick.
-  const [members, setMembers] = useState([]);
-
-  // UI status
   const [status, setStatus] = useState({ kind: "idle", msg: "" });
 
-  // Load session + seed commissioner
+  const [stepKey, setStepKey] = useState("basics");
+
+  const [leagueName, setLeagueName] = useState("");
+  const [membersCount, setMembersCount] = useState(4);
+  const [weeks, setWeeks] = useState(3);
+  const [draftMode, setDraftMode] = useState("self");
+
+  // members: [{ id, role, name, email, isLeagueManager, username, pin, userId }]
+  const [members, setMembers] = useState([]);
+
   useEffect(() => {
     let ignore = false;
 
@@ -156,6 +149,7 @@ export default function LeagueSetup() {
             name: m.name?.trim?.() ? m.name : commissionerName,
             email: userEmail || m.email || "",
             isLeagueManager: true,
+            userId: userId || m.userId || "",
           };
         });
       }
@@ -167,9 +161,15 @@ export default function LeagueSetup() {
         name: commissionerName,
         email: userEmail,
         isLeagueManager: true,
+        username: safeLocalPart(userEmail) || "commissioner",
+        pin: "",
+        userId: userId,
       });
 
-      const extra = Math.max(0, clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1);
+      const extra = Math.max(
+        0,
+        clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1
+      );
       for (let i = 0; i < extra; i++) {
         base.push({
           id: `m${i + 2}`,
@@ -177,6 +177,9 @@ export default function LeagueSetup() {
           name: "",
           email: "",
           isLeagueManager: false,
+          username: "",
+          pin: "",
+          userId: "", // only needed if they are LM
         });
       }
       return base;
@@ -184,24 +187,28 @@ export default function LeagueSetup() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // Resize array when membersCount changes
+  // Resize member list when membersCount changes (keep commissioner intact)
   useEffect(() => {
     setMembers((prev) => {
       if (!prev || prev.length === 0) return prev;
 
       const desired = clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX);
-      const commissioner = prev.find((m) => m.role === "commissioner") || {
-        id: "commissioner",
-        role: "commissioner",
-        name: safeLocalPart(userEmail) || "Commissioner",
-        email: userEmail,
-        isLeagueManager: true,
-      };
+      const commissioner =
+        prev.find((m) => m.role === "commissioner") || {
+          id: "commissioner",
+          role: "commissioner",
+          name: safeLocalPart(userEmail) || "Commissioner",
+          email: userEmail,
+          isLeagueManager: true,
+          username: safeLocalPart(userEmail) || "commissioner",
+          pin: "",
+          userId,
+        };
 
-      const existingMembers = prev.filter((m) => m.role !== "commissioner");
+      const existing = prev.filter((m) => m.role !== "commissioner");
       const need = Math.max(0, desired - 1);
 
-      const nextMembers = existingMembers.slice(0, need);
+      const nextMembers = existing.slice(0, need);
       while (nextMembers.length < need) {
         const idx = nextMembers.length + 2;
         nextMembers.push({
@@ -210,28 +217,16 @@ export default function LeagueSetup() {
           name: "",
           email: "",
           isLeagueManager: false,
+          username: "",
+          pin: "",
+          userId: "",
         });
       }
 
       return [commissioner, ...nextMembers];
     });
-  }, [membersCount, userEmail]);
+  }, [membersCount, userEmail, userId]);
 
-  // LM toggle rule: must have email
-  useEffect(() => {
-    setMembers((prev) =>
-      prev.map((m) => {
-        if (m.role === "commissioner") {
-          return { ...m, email: userEmail || m.email || "", isLeagueManager: true };
-        }
-        const hasEmail = !!(m.email || "").trim();
-        if (!hasEmail && m.isLeagueManager) return { ...m, isLeagueManager: false };
-        return m;
-      })
-    );
-  }, [userEmail]);
-
-  // Validation helpers
   const commissioner = members.find((m) => m.role === "commissioner");
   const membersOnly = members.filter((m) => m.role !== "commissioner");
 
@@ -246,10 +241,24 @@ export default function LeagueSetup() {
 
   function canGoNextFromMembers() {
     if (!commissioner?.name?.trim()) return false;
+
     for (const m of membersOnly) {
       if (!m.name?.trim()) return false;
-      if (m.isLeagueManager && !(m.email || "").trim()) return false;
+
+      // If they are LM, they MUST log in -> require email + userId
+      if (m.isLeagueManager) {
+        if (!(m.email || "").trim()) return false;
+        if (!(m.userId || "").trim()) return false;
+      }
+
+      // Non-LM members must have either (username+pin) OR email (optional)
+      // We’ll require username+pin to keep it simple and consistent.
+      if (!m.isLeagueManager) {
+        if (!(m.username || "").trim()) return false;
+        if (!(m.pin || "").trim()) return false;
+      }
     }
+
     return true;
   }
 
@@ -278,40 +287,43 @@ export default function LeagueSetup() {
     setStepKey(prev);
   }
 
-  function resetLeagueLocal() {
-    localStorage.removeItem(LS_LEAGUE_KEY);
-    clearActiveLeague();
-    setStatus({ kind: "success", msg: "League reset. You can run setup again." });
-    setStepKey("basics");
-  }
-
   async function activateLeague() {
     setStatus({ kind: "loading", msg: "Activating league..." });
 
     try {
-      // Must be authed
-      if (!userId || !userEmail) throw new Error("You must be logged in to activate a league.");
+      if (!userId || !userEmail) {
+        throw new Error("You must be logged in to activate a league.");
+      }
 
-      // Final validation
       if (!canGoNextFromBasics()) throw new Error("League name is required.");
       if (!canGoNextFromFamilySize()) throw new Error("Member count is invalid.");
-      if (!canGoNextFromMembers()) throw new Error("Member names are required.");
+      if (!canGoNextFromMembers()) throw new Error("Member info is incomplete.");
       if (!canGoNextFromWeeks()) throw new Error("Weeks selection is invalid.");
       if (!canGoNextFromDraftMode()) throw new Error("Draft mode is invalid.");
 
-      // IMPORTANT: DB can only insert commissioner right now (auth FK).
-      // We still pass the full list for future bricks, but service will insert commissioner only.
-      const payloadMembers = members.map((m) => ({
-        user_id: m.role === "commissioner" ? userId : null,
-        display_name: (m.name || "").trim(),
-        role: m.role === "commissioner" ? "commissioner" : "participant",
-        is_league_manager: m.role === "commissioner" ? true : !!m.isLeagueManager,
-        username: null,
-        pin: null,
-        email: (m.email || "").trim() || null,
-      }));
+      // Build members payload for leagueService
+      const payloadMembers = members.map((m) => {
+        const isCommissioner = m.role === "commissioner";
+        const wantsLM = !!m.isLeagueManager || isCommissioner;
 
-      const result = await createLeagueWithGeneratedData({
+        return {
+          display_name: (m.name || "").trim(),
+          role: isCommissioner ? "commissioner" : "member",
+          is_league_manager: wantsLM,
+
+          // LM users must be authenticated and have a userId
+          user_id: wantsLM ? (m.userId || "").trim() : null,
+
+          // PIN-based members (non-LM)
+          username: !wantsLM ? (m.username || "").trim() : safeLocalPart(m.email),
+          pin: !wantsLM ? (m.pin || "").trim() : null,
+
+          // optional
+          email: (m.email || "").trim(),
+        };
+      });
+
+      const { league } = await createLeagueWithGeneratedData({
         name: leagueName.trim(),
         commissionerEmail: userEmail,
         draftMode,
@@ -319,32 +331,16 @@ export default function LeagueSetup() {
         members: payloadMembers,
       });
 
-      // Activation Hook (this is the missing wiring)
-      setActiveLeague(result.leagueId);
+      // ✅ Activation hook (so Home/Draft know what to load)
+      setActiveLeague(league.id);
 
-      // Optional local cache (Stage 2 convenience)
-      localStorage.setItem(
-        LS_LEAGUE_KEY,
-        JSON.stringify({
-          leagueId: result.leagueId,
-          leagueName: leagueName.trim(),
-          commissionerEmail: userEmail,
-          weeks: clampInt(weeks, WEEKS_MIN, WEEKS_MAX),
-          draftMode,
-        })
-      );
-
-      setStatus({ kind: "success", msg: "League activated! Redirecting to Home..." });
-
-      setTimeout(() => {
-        nav("/home", { replace: true, state: { from: location.pathname } });
-      }, 350);
+      setStatus({ kind: "success", msg: "League activated! Redirecting..." });
+      nav("/home", { replace: true, state: { from: location.pathname } });
     } catch (e) {
       setStatus({ kind: "error", msg: e?.message || "Could not activate league." });
     }
   }
 
-  // Render helpers
   function renderBasics() {
     return (
       <Card title="League basics" right={<Pill>Step 1</Pill>}>
@@ -357,7 +353,6 @@ export default function LeagueSetup() {
             placeholder="Example: Family League"
             autoFocus
           />
-          <div className="helper muted">Tip: keep it simple. You can rename later.</div>
         </div>
       </Card>
     );
@@ -367,11 +362,13 @@ export default function LeagueSetup() {
     return (
       <Card title="Family size" right={<Pill>Step 2</Pill>}>
         <div className="field">
-          <label className="label">How many members will be in this league? (3–12)</label>
+          <label className="label">How many members? (3–12)</label>
           <select
             className="input"
             value={membersCount}
-            onChange={(e) => setMembersCount(clampInt(e.target.value, MEMBERS_MIN, MEMBERS_MAX))}
+            onChange={(e) =>
+              setMembersCount(clampInt(e.target.value, MEMBERS_MIN, MEMBERS_MAX))
+            }
           >
             {makeRange(MEMBERS_MIN, MEMBERS_MAX).map((n) => (
               <option key={n} value={n}>
@@ -379,7 +376,6 @@ export default function LeagueSetup() {
               </option>
             ))}
           </select>
-          <div className="helper muted">We’ll set up your member list next.</div>
         </div>
       </Card>
     );
@@ -389,19 +385,11 @@ export default function LeagueSetup() {
     return (
       <Card title="Add members" right={<Pill>Step 3</Pill>}>
         <div className="muted" style={{ marginBottom: 10 }}>
-          Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an email.
+          Rule: <strong>Commissioner + selected League Managers must log in</strong> (we store their auth user_id).
+          Everyone else will use <strong>username + PIN</strong>.
         </div>
 
-        <div className="membersGridHeader">
-          <div className="colLabel muted">Member</div>
-          <div className="colLabel muted">Name (required)</div>
-          <div className="colLabel muted">Email (optional)</div>
-          <div className="colLabel muted" style={{ textAlign: "right" }}>
-            League manager
-          </div>
-        </div>
-
-        {/* Commissioner row */}
+        {/* Commissioner */}
         <div className="membersRow commissionerRow">
           <div className="memberTag">
             <span className="badge">Commissioner</span>
@@ -413,7 +401,11 @@ export default function LeagueSetup() {
               value={commissioner?.name || ""}
               onChange={(e) => {
                 const v = e.target.value;
-                setMembers((prev) => prev.map((m) => (m.role === "commissioner" ? { ...m, name: v } : m)));
+                setMembers((prev) =>
+                  prev.map((m) =>
+                    m.role === "commissioner" ? { ...m, name: v } : m
+                  )
+                );
               }}
               placeholder="Commissioner name"
             />
@@ -421,7 +413,7 @@ export default function LeagueSetup() {
 
           <div>
             <input className="input" value={userEmail} disabled />
-            <div className="helper muted">Commissioner email is pulled from your login.</div>
+            <div className="helper muted">Commissioner email is from login.</div>
           </div>
 
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -432,63 +424,137 @@ export default function LeagueSetup() {
           </div>
         </div>
 
-        {/* Other members */}
+        {/* Others */}
         {membersOnly.map((m, idx) => {
           const label = `Member ${idx + 2}`;
-          const hasEmail = !!(m.email || "").trim();
-          const lmDisabled = !hasEmail;
 
           return (
-            <div key={m.id} className="membersRow">
-              <div className="memberTag">{label}</div>
+            <div key={m.id} className="card" style={{ marginTop: 12 }}>
+              <div className="cardBody">
+                <div className="membersRow">
+                  <div className="memberTag">{label}</div>
 
-              <div>
-                <input
-                  className="input"
-                  value={m.name}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, name: v } : x)));
-                  }}
-                  placeholder="Name"
-                />
-              </div>
+                  <div>
+                    <label className="label">Name (required)</label>
+                    <input
+                      className="input"
+                      value={m.name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setMembers((prev) =>
+                          prev.map((x) => (x.id === m.id ? { ...x, name: v } : x))
+                        );
+                      }}
+                      placeholder="Name"
+                    />
+                  </div>
 
-              <div>
-                <input
-                  className="input"
-                  value={m.email}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, email: v } : x)));
-                  }}
-                  placeholder="Email (optional)"
-                />
-                {m.isLeagueManager && !hasEmail ? (
-                  <div className="helper errorText">Add an email to grant league manager permissions.</div>
-                ) : null}
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", flexDirection: "column", alignItems: "flex-end" }}>
-                <label
-                  className={["toggleWrap", lmDisabled ? "disabled" : ""].join(" ")}
-                  title={lmDisabled ? "Add an email address to enable League Manager." : "League Managers can enter points."}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!m.isLeagueManager}
-                    disabled={lmDisabled}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, isLeagueManager: checked } : x)));
-                    }}
-                  />
-                  <span className="toggle" />
-                </label>
-
-                <div className="helper muted" style={{ textAlign: "right", maxWidth: 260 }}>
-                  League managers can score matchups and <strong>enter points for everyone</strong>.
+                  <div style={{ display: "flex", justifyContent: "flex-end", flexDirection: "column", alignItems: "flex-end" }}>
+                    <label className="toggleWrap" title="League Managers must log in">
+                      <input
+                        type="checkbox"
+                        checked={!!m.isLeagueManager}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setMembers((prev) =>
+                            prev.map((x) =>
+                              x.id === m.id
+                                ? {
+                                    ...x,
+                                    isLeagueManager: checked,
+                                    // when switching to LM, clear pin fields (they will log in)
+                                    username: checked ? "" : x.username,
+                                    pin: checked ? "" : x.pin,
+                                  }
+                                : x
+                            )
+                          );
+                        }}
+                      />
+                      <span className="toggle" />
+                    </label>
+                    <div className="helper muted" style={{ textAlign: "right", maxWidth: 260 }}>
+                      Check if this person should be a League Manager (must log in).
+                    </div>
+                  </div>
                 </div>
+
+                {m.isLeagueManager ? (
+                  <div className="membersRow" style={{ marginTop: 10 }}>
+                    <div className="memberTag muted">LM Login</div>
+
+                    <div>
+                      <label className="label">Email (required)</label>
+                      <input
+                        className="input"
+                        value={m.email}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMembers((prev) =>
+                            prev.map((x) => (x.id === m.id ? { ...x, email: v } : x))
+                          );
+                        }}
+                        placeholder="email@domain.com"
+                      />
+                      <div className="helper muted">
+                        This LM must sign up / log in. Then paste their User ID below.
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="label">User ID (required)</label>
+                      <input
+                        className="input"
+                        value={m.userId}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMembers((prev) =>
+                            prev.map((x) => (x.id === m.id ? { ...x, userId: v } : x))
+                          );
+                        }}
+                        placeholder="Supabase auth user id (uuid)"
+                      />
+                      <div className="helper muted">
+                        Get this from Supabase Auth → Users after they sign up.
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="membersRow" style={{ marginTop: 10 }}>
+                    <div className="memberTag muted">PIN Access</div>
+
+                    <div>
+                      <label className="label">Username (required)</label>
+                      <input
+                        className="input"
+                        value={m.username}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMembers((prev) =>
+                            prev.map((x) => (x.id === m.id ? { ...x, username: v } : x))
+                          );
+                        }}
+                        placeholder="Example: camden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label">PIN (required)</label>
+                      <input
+                        className="input"
+                        value={m.pin}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setMembers((prev) =>
+                            prev.map((x) => (x.id === m.id ? { ...x, pin: v } : x))
+                          );
+                        }}
+                        placeholder="4 digits (or simple code)"
+                      />
+                      <div className="helper muted">This is stored hashed.</div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -500,10 +566,8 @@ export default function LeagueSetup() {
   function renderWeeks() {
     return (
       <Card title="League length" right={<Pill>Step 4</Pill>}>
-        <div className="notice">Paid leagues are <strong>$1 per week</strong> (no per-user fee). Payment comes later.</div>
-
-        <div className="field" style={{ marginTop: 10 }}>
-          <label className="label">How many weeks will this league run? (3–12)</label>
+        <div className="field">
+          <label className="label">How many weeks? (3–12)</label>
           <select
             className="input"
             value={weeks}
@@ -511,7 +575,7 @@ export default function LeagueSetup() {
           >
             {makeRange(WEEKS_MIN, WEEKS_MAX).map((w) => (
               <option key={w} value={w}>
-                {w} week{w === 1 ? "" : "s"}
+                {w} weeks
               </option>
             ))}
           </select>
@@ -523,21 +587,29 @@ export default function LeagueSetup() {
   function renderDraftMode() {
     return (
       <Card title="Draft mode" right={<Pill>Step 5</Pill>}>
-        <div className="muted" style={{ marginBottom: 10 }}>
-          Choose how individual challenges are drafted.
-        </div>
-
         <div className="radioGrid">
           <label className={["radioCard", draftMode === "self" ? "active" : ""].join(" ")}>
-            <input type="radio" name="draftMode" value="self" checked={draftMode === "self"} onChange={() => setDraftMode("self")} />
+            <input
+              type="radio"
+              name="draftMode"
+              value="self"
+              checked={draftMode === "self"}
+              onChange={() => setDraftMode("self")}
+            />
             <div className="radioTitle">Draft your own challenges</div>
-            <div className="radioDesc muted">Each member selects their own challenge category.</div>
+            <div className="radioDesc muted">Each person picks their own category.</div>
           </label>
 
           <label className={["radioCard", draftMode === "other" ? "active" : ""].join(" ")}>
-            <input type="radio" name="draftMode" value="other" checked={draftMode === "other"} onChange={() => setDraftMode("other")} />
+            <input
+              type="radio"
+              name="draftMode"
+              value="other"
+              checked={draftMode === "other"}
+              onChange={() => setDraftMode("other")}
+            />
             <div className="radioTitle">Draft other members’ challenges</div>
-            <div className="radioDesc muted">Members draft categories for someone else (more strategy + fun).</div>
+            <div className="radioDesc muted">Family drafts categories for others.</div>
           </label>
         </div>
       </Card>
@@ -565,14 +637,17 @@ export default function LeagueSetup() {
 
           <div className="reviewItem">
             <div className="muted">Draft mode</div>
-            <div>{draftMode === "self" ? "Draft your own challenges" : "Draft other members’ challenges"}</div>
+            <div>{draftMode}</div>
           </div>
         </div>
 
-        <div className="notice" style={{ marginTop: 14 }}>
-          <strong>Important:</strong> Due to security + database constraints, only users who already have accounts can be inserted into the league right now.
-          <br />
-          In this brick, we’ll create the league + commissioner. Next brick will be “Invite / Join League” so your family members appear here automatically.
+        <div className="notice" style={{ marginTop: 12 }}>
+          Activation will:
+          <ul style={{ marginTop: 8 }}>
+            <li>Create league + members in Supabase</li>
+            <li>Generate draft order + schedule ONCE and store them</li>
+            <li>Set active league id locally so Home/Draft can load real data</li>
+          </ul>
         </div>
       </Card>
     );
@@ -581,20 +656,31 @@ export default function LeagueSetup() {
   function renderActivate() {
     return (
       <Card title="Activate" right={<Pill>Step 7</Pill>}>
-        <div className="notice">When you activate, we save this league setup and send you to the league home.</div>
+        <div className="notice">
+          When you activate, we save this league setup and send you to the league home.
+        </div>
 
         <div style={{ marginTop: 12 }}>
-          <button className="btnPrimary" type="button" onClick={activateLeague} disabled={status.kind === "loading"}>
+          <button
+            className="btnPrimary"
+            type="button"
+            onClick={activateLeague}
+            disabled={status.kind === "loading"}
+          >
             Activate League
-          </button>
-
-          <button className="btnGhost" type="button" onClick={resetLeagueLocal} style={{ marginLeft: 10 }}>
-            Reset League (run wizard again)
           </button>
         </div>
 
-        {status.kind === "error" ? <div className="helper errorText" style={{ marginTop: 10 }}>{status.msg}</div> : null}
-        {status.kind === "success" ? <div className="helper" style={{ marginTop: 10 }}>{status.msg}</div> : null}
+        {status.kind === "error" ? (
+          <div className="helper errorText" style={{ marginTop: 10 }}>
+            {status.msg}
+          </div>
+        ) : null}
+        {status.kind === "success" ? (
+          <div className="helper" style={{ marginTop: 10 }}>
+            {status.msg}
+          </div>
+        ) : null}
       </Card>
     );
   }
@@ -627,9 +713,8 @@ export default function LeagueSetup() {
     if (stepKey === "weeks") return canGoNextFromWeeks();
     if (stepKey === "draftMode") return canGoNextFromDraftMode();
     if (stepKey === "review") return true;
-    if (stepKey === "activate") return false;
     return false;
-  }, [stepKey, leagueName, membersCount, members, weeks, draftMode, commissioner]);
+  }, [stepKey, leagueName, membersCount, members, weeks, draftMode]);
 
   const showBack = stepKey !== "basics";
   const showNext = stepKey !== "activate";
@@ -664,7 +749,11 @@ export default function LeagueSetup() {
         </div>
       </div>
 
-      {status.kind === "error" ? <div className="helper errorText" style={{ marginTop: 10 }}>{status.msg}</div> : null}
+      {status.kind === "error" ? (
+        <div className="helper errorText" style={{ marginTop: 10 }}>
+          {status.msg}
+        </div>
+      ) : null}
     </div>
   );
 }
