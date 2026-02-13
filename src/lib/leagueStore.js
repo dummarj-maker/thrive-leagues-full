@@ -1,17 +1,34 @@
 // src/lib/leagueStore.js
-// Single source of truth for "which league is active" in this browser.
-
-const LS_ACTIVE_LEAGUE_ID = "tl_active_league_id";
+const KEY = "tl_active_league_id";
 
 export function setActiveLeague(leagueId) {
-  if (!leagueId) throw new Error("setActiveLeague requires a leagueId.");
-  localStorage.setItem(LS_ACTIVE_LEAGUE_ID, String(leagueId));
+  if (!leagueId) throw new Error("setActiveLeague: missing leagueId");
+  localStorage.setItem(KEY, String(leagueId));
+  window.dispatchEvent(new Event("tl_active_league_changed"));
 }
 
-export function getActiveLeagueId() {
-  return localStorage.getItem(LS_ACTIVE_LEAGUE_ID);
+export function getActiveLeague() {
+  return localStorage.getItem(KEY);
 }
 
 export function clearActiveLeague() {
-  localStorage.removeItem(LS_ACTIVE_LEAGUE_ID);
+  localStorage.removeItem(KEY);
+  window.dispatchEvent(new Event("tl_active_league_changed"));
+}
+
+/**
+ * Small hook-like helper pattern without adding dependencies.
+ * Use this inside components if you want reactive updates.
+ */
+export function subscribeActiveLeague(callback) {
+  if (typeof callback !== "function") return () => {};
+  const handler = () => callback(getActiveLeague());
+
+  window.addEventListener("storage", handler);
+  window.addEventListener("tl_active_league_changed", handler);
+
+  return () => {
+    window.removeEventListener("storage", handler);
+    window.removeEventListener("tl_active_league_changed", handler);
+  };
 }
