@@ -1,7 +1,7 @@
-// src/pages/Draft.jsx
+// Draft.jsx (place in the file your router uses for /draft)
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabaseClient";
-import { getActiveLeague } from "../lib/leagueStore";
+import { supabase } from "./lib/supabaseClient"; // if your Draft is in /src/pages, change to "../lib/supabaseClient"
+import { getActiveLeagueId, subscribeActiveLeague } from "./lib/leagueStore"; // if /src/pages, change to "../lib/leagueStore"
 
 function Card({ title, children, right }) {
   return (
@@ -15,67 +15,85 @@ function Card({ title, children, right }) {
   );
 }
 
-export default function Draft() {
-  const leagueId = useMemo(() => getActiveLeague(), []);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [draftOrder, setDraftOrder] = useState([]); // [{draft_position, member_id, display_name}]
-  const [categories, setCategories] = useState([]); // [{id, name}]
+function Pill({ children }) {
+  return <span className="pill">{children}</span>;
+}
 
+function prettyErr(e) {
+  if (!e) return "Unknown error";
+  if (typeof e === "string") return e;
+  return e.message || JSON.stringify(e);
+}
+
+export default function Draft() {
+  const [leagueId, setLeagueId] = useState(() => getActiveLeagueId());
+  const [status, setStatus] = useState({ kind: "idle", msg: "" });
+
+  const [draftRows, setDraftRows] = useState([]); // [{draft_position, member_id, league_members:{display_name}}]
+  const [categories, setCategories] = useState([]); // [{id, name, ...}]
+
+  // Keep leagueId in sync with leagueStore updates
+  useEffect(() => {
+    const unsub = subscribeActiveLeague((id) => setLeagueId(id || ""));
+    return unsub;
+  }, []);
+
+  // Load Draft Order + Categories for active league
   useEffect(() => {
     let ignore = false;
 
     async function load() {
-      setLoading(true);
-      setErr("");
+      if (!leagueId) {
+        setDraftRows([]);
+        setCategories([]);
+        setStatus({
+          kind: "error",
+          msg:
+            "No active league is set yet. Go to /setup and Activate a league (it must call setActiveLeague(league.id)).",
+        });
+        return;
+      }
+
+      setStatus({ kind: "loading", msg: "Loading draft data..." });
 
       try {
-        if (!leagueId) throw new Error("No active league found. Please run Setup.");
-
-        // 1) Load draft order
-        const { data: dRows, error: dErr } = await supabase
+        // 1) Draft order for this league, joined to league_members display_name
+        const { data: draftData, error: draftErr } = await supabase
           .from("draft_order")
-          .select("draft_position, member_id")
+          .select(
+            `
+            draft_position,
+            member_id,
+            league_members:member_id (
+              id,
+              display_name,
+              user_id,
+              role
+            )
+          `
+          )
           .eq("league_id", leagueId)
           .order("draft_position", { ascending: true });
 
-        if (dErr) throw dErr;
+        if (draftErr) throw draftErr;
 
-        const memberIds = (dRows || []).map((r) => r.member_id);
-        if (memberIds.length === 0) {
-          setDraftOrder([]);
-        } else {
-          // 2) Load member names
-          const { data: mRows, error: mErr } = await supabase
-            .from("league_members")
-            .select("id, display_name")
-            .in("id", memberIds);
-
-          if (mErr) throw mErr;
-
-          const nameById = new Map((mRows || []).map((m) => [m.id, m.display_name]));
-          const merged = (dRows || []).map((r) => ({
-            draft_position: r.draft_position,
-            member_id: r.member_id,
-            display_name: nameById.get(r.member_id) || "Member",
-          }));
-
-          setDraftOrder(merged);
-        }
-
-        // 3) Load categories
-        const { data: cRows, error: cErr } = await supabase
+        // 2) Categories list (global list for now)
+        const { data: catData, error: catErr } = await supabase
           .from("categories")
-          .select("id, name")
+          .select("*")
           .order("name", { ascending: true });
 
-        if (cErr) throw cErr;
+        if (catErr) throw catErr;
 
-        if (!ignore) setCategories(cRows || []);
+        if (ignore) return;
+
+        setDraftRows(draftData || []);
+        setCategories(catData || []);
+
+        setStatus({ kind: "success", msg: "Loaded." });
       } catch (e) {
-        if (!ignore) setErr(e?.message || "Failed to load Draft data.");
-      } finally {
-        if (!ignore) setLoading(false);
+        if (ignore) return;
+        setStatus({ kind: "error", msg: prettyErr(e) });
       }
     }
 
@@ -86,49 +104,115 @@ export default function Draft() {
     };
   }, [leagueId]);
 
+  const draftNames = useMemo(() => {
+    return (draftRows || []).map((r) => {
+      const name = r?.league_members?.display_name || "Member";
+      return { pos: r.draft_position, name };
+    });
+  }, [draftRows]);
+
   return (
     <div className="pageWrap">
-      <Card title="Draft" right={<span className="pill">Wired In</span>}>
-        {loading ? <div className="muted">Loading draft data…</div> : null}
-        {err ? <div className="helper errorText">{err}</div> : null}
+      <Card
+        title="Draft"
+        right={
+          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Pill>Persisted</Pill>
+            <span className="muted" style={{ fontSize: 12 }}>
+              League: {leagueId ? leagueId.slice(0, 8) + "…" : "none"}
+            </span>
+          </span>
+        }
+      >
+        {status.kind === "loading" ? (
+          <div className="muted">Loading…</div>
+        ) : null}
 
-        {!loading && !err ? (
-          <div className="seasonGrid" style={{ marginTop: 10 }}>
-            <div className="seasonTile">
-              <div className="tileKicker">Draft Order</div>
-              <div className="tileSub muted">Generated once at league creation.</div>
-
-              <ol className="leaderboard" style={{ marginTop: 10 }}>
-                {draftOrder.map((d) => (
-                  <li key={d.member_id} className="row">
-                    <span className="rowLeft">
-                      <span className="rank">{String(d.draft_position).padStart(2, "0")}</span>
-                      <span className="truncate">{d.display_name}</span>
-                    </span>
-                  </li>
-                ))}
-                {draftOrder.length === 0 ? <div className="muted">No draft order found.</div> : null}
-              </ol>
-            </div>
-
-            <div className="seasonTile">
-              <div className="tileKicker">Categories</div>
-              <div className="tileSub muted">These are the available life categories.</div>
-
-              <div style={{ marginTop: 10 }}>
-                {categories.length ? (
-                  <div className="chips" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {categories.map((c) => (
-                      <span key={c.id} className="chip">{c.name}</span>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="muted">No categories found.</div>
-                )}
-              </div>
-            </div>
+        {status.kind === "error" ? (
+          <div className="helper errorText" style={{ marginBottom: 12 }}>
+            {status.msg}
           </div>
         ) : null}
+
+        <div className="seasonGrid" style={{ gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {/* Left: Draft Order */}
+          <div className="seasonTile" style={{ padding: 0 }}>
+            <div style={{ padding: 14 }}>
+              <div className="tileTitle">Draft Order</div>
+              <div className="tileSub">
+                Generated once at league creation. Only editable via Commissioner Tools.
+              </div>
+            </div>
+
+            <div style={{ padding: "0 14px 14px 14px" }}>
+              {draftNames.length === 0 ? (
+                <div className="muted">
+                  No draft order rows found for this league.
+                  <br />
+                  That usually means league creation didn’t insert into <code>draft_order</code> for
+                  the active league id.
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {draftNames.map((d) => (
+                    <div
+                      key={`${d.pos}-${d.name}`}
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "rgba(255,255,255,0.06)",
+                      }}
+                    >
+                      <div className="pill" style={{ width: 44, textAlign: "center" }}>
+                        {String(d.pos).padStart(2, "0")}
+                      </div>
+                      <div style={{ fontWeight: 600 }}>{d.name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Categories (Phase 1 view only) */}
+          <div className="seasonTile" style={{ padding: 0 }}>
+            <div style={{ padding: 14 }}>
+              <div className="tileTitle">Categories</div>
+              <div className="tileSub">
+                Phase 1: show the official categories. Next brick: commissioner drag-and-drop
+                assignment per member.
+              </div>
+            </div>
+
+            <div style={{ padding: "0 14px 14px 14px" }}>
+              {categories.length === 0 ? (
+                <div className="muted">
+                  No categories found. That means your <code>categories</code> table is empty (or RLS
+                  is blocking reads).
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {categories.map((c) => (
+                    <div
+                      key={c.id}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "rgba(255,255,255,0.06)",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {c.name || c.title || "Category"}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </Card>
     </div>
   );
