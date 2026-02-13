@@ -1,7 +1,9 @@
+// src/pages/LeagueSetup.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { createLeagueWithGeneratedData } from "../lib/leagueService";
+import { setActiveLeague } from "../lib/leagueStore";
 
 // Local storage keys (keep consistent)
 const LS_LEAGUE_KEY = "tl_league";
@@ -124,6 +126,11 @@ export default function LeagueSetup() {
 
   // Member list objects:
   // { id, role: "commissioner"|"member", name, email, isLeagueManager }
+  //
+  // NOTE (Stage 2 wiring):
+  // Only the commissioner is guaranteed to have a Supabase auth.user.id.
+  // We'll create the league + commissioner membership now,
+  // and add the "invite/join" brick for League Managers next.
   const [members, setMembers] = useState([]);
 
   // UI status
@@ -153,10 +160,12 @@ export default function LeagueSetup() {
 
   const userEmail = (session?.user?.email || "").toLowerCase().trim();
   const userId = session?.user?.id || "";
+
   const freeUsedKey = useMemo(
     () => (userId ? `${LS_FREE_USED_PREFIX}${userId}` : ""),
     [userId]
   );
+
   const freeUsed = useMemo(() => {
     if (!freeUsedKey) return false;
     return localStorage.getItem(freeUsedKey) === "1";
@@ -164,33 +173,28 @@ export default function LeagueSetup() {
 
   // Seed defaults once session is available
   useEffect(() => {
-    // Commissioner derived fields
     const commissionerName =
       session?.user?.user_metadata?.full_name?.trim?.() ||
       session?.user?.user_metadata?.name?.trim?.() ||
       safeLocalPart(session?.user?.email) ||
       "Commissioner";
 
-    // Default league name if empty
     setLeagueName((prev) => (prev && prev.trim() ? prev : "Family League"));
 
-    // Initialize members if empty OR if commissioner not set
     setMembers((prev) => {
       const hasCommissioner = prev.some((m) => m.role === "commissioner");
       if (hasCommissioner) {
-        // Keep commissioner email synced to login (read-only)
         return prev.map((m) => {
           if (m.role !== "commissioner") return m;
           return {
             ...m,
             name: m.name?.trim?.() ? m.name : commissionerName,
             email: userEmail || m.email || "",
-            isLeagueManager: true, // commissioner defaults to LM
+            isLeagueManager: true,
           };
         });
       }
 
-      // Create commissioner + empty members based on count
       const base = [];
       base.push({
         id: "commissioner",
@@ -204,6 +208,7 @@ export default function LeagueSetup() {
         0,
         clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX) - 1
       );
+
       for (let i = 0; i < extra; i++) {
         base.push({
           id: `m${i + 2}`,
@@ -213,6 +218,7 @@ export default function LeagueSetup() {
           isLeagueManager: false,
         });
       }
+
       return base;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -257,7 +263,6 @@ export default function LeagueSetup() {
     setMembers((prev) =>
       prev.map((m) => {
         if (m.role === "commissioner") {
-          // Commissioner always has email from login; keep LM true
           return { ...m, email: userEmail || m.email || "", isLeagueManager: true };
         }
         const hasEmail = !!(m.email || "").trim();
@@ -279,7 +284,6 @@ export default function LeagueSetup() {
     [weeks, isFreeEligible]
   );
 
-  // Validation helpers
   const commissioner = members.find((m) => m.role === "commissioner");
   const membersOnly = members.filter((m) => m.role !== "commissioner");
 
@@ -293,11 +297,9 @@ export default function LeagueSetup() {
   }
 
   function canGoNextFromMembers() {
-    // Commissioner name required; others name required
     if (!commissioner?.name?.trim()) return false;
     for (const m of membersOnly) {
       if (!m.name?.trim()) return false;
-      // LM requires email (already enforced), but we still validate
       if (m.isLeagueManager && !(m.email || "").trim()) return false;
     }
     return true;
@@ -329,7 +331,10 @@ export default function LeagueSetup() {
   }
 
   function resetLeagueLocal() {
+    // Clears local setup marker + active league id
     localStorage.removeItem(LS_LEAGUE_KEY);
+    // active league id is stored separately
+    // (we keep this simple: user can also reset in Builder Mode)
     setStatus({ kind: "success", msg: "League reset. You can run setup again." });
     setStepKey("basics");
   }
@@ -353,9 +358,41 @@ export default function LeagueSetup() {
       const normalizedMembersCount = clampInt(membersCount, MEMBERS_MIN, MEMBERS_MAX);
       const normalizedWeeks = clampInt(weeks, WEEKS_MIN, WEEKS_MAX);
 
-      // Build the local league object (bootstrap cache)
-      const league = {
-        id: `local_${Date.now()}`,
+      // ---- Stage 2: DB-backed league creation (commissioner only) ----
+      //
+      // Why commissioner-only?
+      // Your league_members.user_id is a REQUIRED foreign key.
+      // Only the logged-in commissioner is guaranteed to have a real user_id right now.
+      //
+      // Next brick will add: “League Manager join flow” so selected LMs can log in and attach.
+      const result = await createLeagueWithGeneratedData({
+        name: leagueName.trim(),
+        commissionerEmail: userEmail,
+        draftMode,
+        weeks: normalizedWeeks,
+        members: [
+          {
+            user_id: userId,
+            display_name: (commissioner?.name || "Commissioner").trim(),
+            role: "commissioner",
+            username: null,
+            pin: null,
+            is_league_manager: true,
+          },
+        ],
+      });
+
+      const leagueId = result?.leagueId || result?.league?.id;
+      if (!leagueId) {
+        throw new Error("League created but no leagueId was returned.");
+      }
+
+      // ✅ STEP 2 ACTIVATION HOOK
+      setActiveLeague(leagueId);
+
+      // Keep your existing App.jsx guard working (it checks tl_league exists)
+      const bootstrapLeague = {
+        id: leagueId,
         createdAt: new Date().toISOString(),
         commissionerEmail: userEmail,
         leagueName: leagueName.trim(),
@@ -371,47 +408,18 @@ export default function LeagueSetup() {
             ? "Free (ad-supported) — 3 weeks, max 4 members, one free league per user."
             : "$1 per week (no user fee).",
         },
-        members: members.map((m, idx) => ({
+        // store the “planned members” locally for now (join flow comes next)
+        plannedMembers: members.map((m, idx) => ({
           order: idx + 1,
           role: m.role === "commissioner" ? "commissioner" : "member",
-          displayLabel: m.role === "commissioner" ? "Commissioner" : `Member ${idx + 1}`,
           name: (m.name || "").trim(),
-          email: (m.email || "").trim(), // kept for your wizard rule; DB auth uses user_id
+          email: (m.email || "").trim(),
           isLeagueManager: !!m.isLeagueManager,
         })),
-        permissions: {
-          leagueManagersCanEnterPoints: true,
-        },
       };
 
-      // Persist to Supabase + generate (ONCE) draft order + schedule
-      // Your DB schema uses league_members.user_id (uuid), so every member needs one.
-      // Commissioner uses auth.uid(); non-auth members get generated UUIDs that remain stable.
-      const membersPayload = league.members.map((m) => ({
-        user_id: m.role === "commissioner" ? userId : crypto.randomUUID(),
-        display_name: m.name,
-        role: m.role,
-        is_league_manager: m.role === "commissioner" ? true : !!m.isLeagueManager,
-        // Optional identity fields your table supports:
-        username: null,
-        pin: null,
-      }));
+      localStorage.setItem(LS_LEAGUE_KEY, JSON.stringify(bootstrapLeague));
 
-      const created = await createLeagueWithGeneratedData({
-        name: league.leagueName,
-        commissionerEmail: userEmail,
-        draftMode: league.draftMode,
-        weeks: league.weeks,
-        members: membersPayload,
-      });
-
-      // Store authoritative leagueId for the rest of the app
-      league.leagueId = created.leagueId;
-
-      // Save local bootstrap cache
-      localStorage.setItem(LS_LEAGUE_KEY, JSON.stringify(league));
-
-      // Mark free as used if they just claimed free
       if (isFreeEligible && freeUsedKey) {
         localStorage.setItem(freeUsedKey, "1");
       }
@@ -420,9 +428,12 @@ export default function LeagueSetup() {
 
       setTimeout(() => {
         nav("/home", { replace: true, state: { from: location.pathname } });
-      }, 500);
+      }, 300);
     } catch (e) {
-      setStatus({ kind: "error", msg: e?.message || "Could not activate league." });
+      setStatus({
+        kind: "error",
+        msg: e?.message || "Could not activate league.",
+      });
     }
   }
 
@@ -472,8 +483,15 @@ export default function LeagueSetup() {
   function renderMembers() {
     return (
       <Card title="Add members" right={<Pill>Step 3</Pill>}>
+        <div className="notice" style={{ marginBottom: 12 }}>
+          <strong>Stage 2 note:</strong> Only the commissioner is created in the database right now (because
+          the database requires a real user ID). We still collect names/emails here, and the next brick will
+          let League Managers log in and join this league.
+        </div>
+
         <div className="muted" style={{ marginBottom: 10 }}>
-          Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an email.
+          Names are required. Emails are optional — <strong>except</strong> League Managers (LM) must have an
+          email.
         </div>
 
         <div className="membersGridHeader">
@@ -498,9 +516,7 @@ export default function LeagueSetup() {
               onChange={(e) => {
                 const v = e.target.value;
                 setMembers((prev) =>
-                  prev.map((m) =>
-                    m.role === "commissioner" ? { ...m, name: v } : m
-                  )
+                  prev.map((m) => (m.role === "commissioner" ? { ...m, name: v } : m))
                 );
               }}
               placeholder="Commissioner name"
@@ -536,9 +552,7 @@ export default function LeagueSetup() {
                   value={m.name}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setMembers((prev) =>
-                      prev.map((x) => (x.id === m.id ? { ...x, name: v } : x))
-                    );
+                    setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, name: v } : x)));
                   }}
                   placeholder="Name"
                 />
@@ -550,9 +564,7 @@ export default function LeagueSetup() {
                   value={m.email}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setMembers((prev) =>
-                      prev.map((x) => (x.id === m.id ? { ...x, email: v } : x))
-                    );
+                    setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, email: v } : x)));
                   }}
                   placeholder="Email (optional)"
                 />
@@ -583,11 +595,7 @@ export default function LeagueSetup() {
                     disabled={lmDisabled}
                     onChange={(e) => {
                       const checked = e.target.checked;
-                      setMembers((prev) =>
-                        prev.map((x) =>
-                          x.id === m.id ? { ...x, isLeagueManager: checked } : x
-                        )
-                      );
+                      setMembers((prev) => prev.map((x) => (x.id === m.id ? { ...x, isLeagueManager: checked } : x)));
                     }}
                   />
                   <span className="toggle" />
@@ -607,7 +615,8 @@ export default function LeagueSetup() {
   function renderWeeks() {
     const freeBanner = isFreeEligible ? (
       <div className="notice success">
-        ✅ This league qualifies for <strong>free (ad-supported)</strong> (3 weeks, max 4 members, one free league per user).
+        ✅ This league qualifies for <strong>free (ad-supported)</strong> (3 weeks, max 4 members, one free
+        league per user).
       </div>
     ) : (
       <div className="notice">
@@ -668,9 +677,7 @@ export default function LeagueSetup() {
               onChange={() => setDraftMode("other")}
             />
             <div className="radioTitle">Draft other members’ challenges</div>
-            <div className="radioDesc muted">
-              Members draft categories for someone else (more strategy + fun).
-            </div>
+            <div className="radioDesc muted">Members draft categories for someone else (more strategy + fun).</div>
           </label>
         </div>
       </Card>
@@ -723,8 +730,7 @@ export default function LeagueSetup() {
             </div>
           ) : (
             <div className="notice">
-              Total today: <strong>${price}</strong>{" "}
-              <span className="muted">(${1}/week × {weeks} weeks)</span>
+              Total today: <strong>${price}</strong> <span className="muted">(${1}/week × {weeks} weeks)</span>
               <div className="muted" style={{ marginTop: 6 }}>
                 Payment wiring will be added in the Activate step later. For now, we store your league config and proceed.
               </div>
@@ -739,25 +745,16 @@ export default function LeagueSetup() {
     return (
       <Card title="Activate" right={<Pill>Step 7</Pill>}>
         <div className="notice">
-          When you activate, we save this league setup and send you to the league home.
+          When you activate, we create the league in the database, generate the draft order + schedule once,
+          set the active league, and send you to Home.
         </div>
 
         <div style={{ marginTop: 12 }}>
-          <button
-            className="btnPrimary"
-            type="button"
-            onClick={activateLeague}
-            disabled={status.kind === "loading"}
-          >
-            Activate League
+          <button className="btnPrimary" type="button" onClick={activateLeague} disabled={status.kind === "loading"}>
+            {status.kind === "loading" ? "Activating..." : "Activate League"}
           </button>
 
-          <button
-            className="btnGhost"
-            type="button"
-            onClick={resetLeagueLocal}
-            style={{ marginLeft: 10 }}
-          >
+          <button className="btnGhost" type="button" onClick={resetLeagueLocal} style={{ marginLeft: 10 }}>
             Reset League (run wizard again)
           </button>
         </div>
@@ -767,6 +764,7 @@ export default function LeagueSetup() {
             {status.msg}
           </div>
         ) : null}
+
         {status.kind === "success" ? (
           <div className="helper" style={{ marginTop: 10 }}>
             {status.msg}
@@ -776,7 +774,6 @@ export default function LeagueSetup() {
     );
   }
 
-  // Step content dispatcher
   function renderStep() {
     switch (stepKey) {
       case "basics":
@@ -798,7 +795,6 @@ export default function LeagueSetup() {
     }
   }
 
-  // Next button enable logic
   const nextEnabled = useMemo(() => {
     if (stepKey === "basics") return canGoNextFromBasics();
     if (stepKey === "familySize") return canGoNextFromFamilySize();
@@ -821,7 +817,6 @@ export default function LeagueSetup() {
 
       {renderStep()}
 
-      {/* Footer nav */}
       <div className="wizardNav">
         <div>
           <button className="btnGhost" type="button" onClick={() => nav("/home")} title="Leave setup">
@@ -844,7 +839,6 @@ export default function LeagueSetup() {
         </div>
       </div>
 
-      {/* Status */}
       {status.kind === "error" ? (
         <div className="helper errorText" style={{ marginTop: 10 }}>
           {status.msg}
@@ -853,16 +847,3 @@ export default function LeagueSetup() {
     </div>
   );
 }
-
-/*
-  Minimal CSS expectations (already in your project styles):
-  - .pageWrap, .card, .cardHeader, .cardTitle, .cardBody
-  - .input, .label, .helper, .muted
-  - .btnPrimary, .btnGhost
-  - .pill, .notice, .notice.success
-  - .wizardSteps, .wizardPill, .wizardPill.active, .wizardPill.done
-  - .wizardNav, .wizardNavRight
-  - .membersGridHeader, .membersRow, .memberTag, .badge
-  - .toggleWrap, .toggleWrap.disabled, .toggle
-  - .radioGrid, .radioCard, .radioCard.active, .radioTitle, .radioDesc
-*/
