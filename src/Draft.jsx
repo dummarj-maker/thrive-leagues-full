@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { supabase } from "./lib/supabaseClient";
-import { getActiveLeagueId } from "./lib/leagueStore";
+// src/pages/Draft.jsx
+import React, { useEffect, useMemo, useState } from "react";
+import { supabase } from "../lib/supabaseClient";
+import { getActiveLeague } from "../lib/leagueStore";
 
 function Card({ title, children, right }) {
   return (
@@ -15,66 +16,119 @@ function Card({ title, children, right }) {
 }
 
 export default function Draft() {
-  const leagueId = getActiveLeagueId();
+  const leagueId = useMemo(() => getActiveLeague(), []);
   const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState([]);
-  const [error, setError] = useState("");
-
-  async function load() {
-    setLoading(true);
-    setError("");
-
-    try {
-      if (!leagueId) throw new Error("No active league. Run setup first.");
-
-      const { data, error: err } = await supabase
-        .from("draft_order")
-        .select("draft_position, member_id, league_members:member_id(display_name)")
-        .eq("league_id", leagueId)
-        .order("draft_position", { ascending: true });
-
-      if (err) throw err;
-
-      setRows(
-        (data || []).map((r) => ({
-          pos: r.draft_position,
-          name: r.league_members?.display_name || "Member",
-        }))
-      );
-    } catch (e) {
-      setError(e?.message || "Could not load draft order.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [err, setErr] = useState("");
+  const [draftOrder, setDraftOrder] = useState([]); // [{draft_position, member_id, display_name}]
+  const [categories, setCategories] = useState([]); // [{id, name}]
 
   useEffect(() => {
+    let ignore = false;
+
+    async function load() {
+      setLoading(true);
+      setErr("");
+
+      try {
+        if (!leagueId) throw new Error("No active league found. Please run Setup.");
+
+        // 1) Load draft order
+        const { data: dRows, error: dErr } = await supabase
+          .from("draft_order")
+          .select("draft_position, member_id")
+          .eq("league_id", leagueId)
+          .order("draft_position", { ascending: true });
+
+        if (dErr) throw dErr;
+
+        const memberIds = (dRows || []).map((r) => r.member_id);
+        if (memberIds.length === 0) {
+          setDraftOrder([]);
+        } else {
+          // 2) Load member names
+          const { data: mRows, error: mErr } = await supabase
+            .from("league_members")
+            .select("id, display_name")
+            .in("id", memberIds);
+
+          if (mErr) throw mErr;
+
+          const nameById = new Map((mRows || []).map((m) => [m.id, m.display_name]));
+          const merged = (dRows || []).map((r) => ({
+            draft_position: r.draft_position,
+            member_id: r.member_id,
+            display_name: nameById.get(r.member_id) || "Member",
+          }));
+
+          setDraftOrder(merged);
+        }
+
+        // 3) Load categories
+        const { data: cRows, error: cErr } = await supabase
+          .from("categories")
+          .select("id, name")
+          .order("name", { ascending: true });
+
+        if (cErr) throw cErr;
+
+        if (!ignore) setCategories(cRows || []);
+      } catch (e) {
+        if (!ignore) setErr(e?.message || "Failed to load Draft data.");
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    }
+
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    return () => {
+      ignore = true;
+    };
   }, [leagueId]);
 
   return (
     <div className="pageWrap">
-      <Card title="Draft Order" right={<span className="pill">Persisted</span>}>
-        {loading ? <div className="muted">Loading…</div> : null}
-        {error ? <div className="helper errorText">{error}</div> : null}
+      <Card title="Draft" right={<span className="pill">Wired In</span>}>
+        {loading ? <div className="muted">Loading draft data…</div> : null}
+        {err ? <div className="helper errorText">{err}</div> : null}
 
-        {!loading && !error ? (
-          <ol className="leaderboard" style={{ marginTop: 10 }}>
-            {rows.map((r) => (
-              <li key={r.pos} className="row">
-                <span className="rowLeft">
-                  <span className="rank">{String(r.pos).padStart(2, "0")}</span>
-                  <span className="truncate">{r.name}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
+        {!loading && !err ? (
+          <div className="seasonGrid" style={{ marginTop: 10 }}>
+            <div className="seasonTile">
+              <div className="tileKicker">Draft Order</div>
+              <div className="tileSub muted">Generated once at league creation.</div>
+
+              <ol className="leaderboard" style={{ marginTop: 10 }}>
+                {draftOrder.map((d) => (
+                  <li key={d.member_id} className="row">
+                    <span className="rowLeft">
+                      <span className="rank">{String(d.draft_position).padStart(2, "0")}</span>
+                      <span className="truncate">{d.display_name}</span>
+                    </span>
+                  </li>
+                ))}
+                {draftOrder.length === 0 ? <div className="muted">No draft order found.</div> : null}
+              </ol>
+            </div>
+
+            <div className="seasonTile">
+              <div className="tileKicker">Categories</div>
+              <div className="tileSub muted">These are the available life categories.</div>
+
+              <div style={{ marginTop: 10 }}>
+                {categories.length ? (
+                  <div className="chips" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {categories.map((c) => (
+                      <span key={c.id} className="chip">{c.name}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="muted">No categories found.</div>
+                )}
+              </div>
+            </div>
+          </div>
         ) : null}
-
-        <div className="muted" style={{ marginTop: 12 }}>
-          Draft order is generated once at league creation and only editable by Commissioner Tools.
-        </div>
       </Card>
     </div>
   );
