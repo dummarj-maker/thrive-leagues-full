@@ -1,4 +1,3 @@
-// src/lib/leagueService.js
 import { supabase } from "./supabaseClient";
 import { generateDraftOrder } from "./generators/generateDraftOrder";
 import { generateRoundRobinSchedule } from "./generators/generateRoundRobinSchedule";
@@ -7,107 +6,109 @@ function safeEmail(x) {
   return (x || "").toLowerCase().trim();
 }
 
-function safeText(x) {
-  const v = (x || "").trim();
-  return v.length ? v : null;
-}
-
 async function hashPin(pin) {
-  // Stage 2: simple SHA-256 hash (no raw pins in DB)
+  // Stage 2 simple hashing. Never store raw PIN in DB.
   if (!pin) return null;
-  const enc = new TextEncoder().encode(String(pin));
+  const enc = new TextEncoder().encode(pin);
   const buf = await crypto.subtle.digest("SHA-256", enc);
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
-/**
- * ROLE MAPPING (matches your DB constraint we saw)
- * - commissioner: commissioner
- * - league manager: verifier
- * - regular member: participant
- */
-function mapRole({ isCommissioner, isLeagueManager }) {
+function toLeagueMemberRole({ isCommissioner, wantsLM }) {
+  // IMPORTANT: must match your DB CHECK constraint values
   if (isCommissioner) return "commissioner";
-  if (isLeagueManager) return "verifier";
-  return "participant";
+  if (wantsLM) return "verifier";
+  return "player";
 }
 
-/**
- * createLeagueWithGeneratedData
- * - Creates league
- * - Creates league_members rows (user_id required ONLY for commissioner + selected LMs)
- * - Generates draft order + schedule ONCE at creation and persists them
- */
 export async function createLeagueWithGeneratedData({
   name,
   commissionerEmail,
   draftMode,
   weeks,
-  members, // [{ display_name, role, is_league_manager, username, pin, email?, user_id? }]
+  members,
+  // members: [{
+  //   display_name,
+  //   username,
+  //   pin,
+  //   email,
+  //   wantsLM,        // boolean: user chose “League Manager”
+  //   user_id,        // UUID ONLY for real logins (commissioner + selected LMs)
+  //   isCommissioner  // boolean
+  // }]
 }) {
   const commEmail = safeEmail(commissionerEmail);
   if (!commEmail) throw new Error("Missing commissioner email.");
   if (!name?.trim()) throw new Error("Missing league name.");
   if (!weeks || weeks < 1) throw new Error("Weeks must be >= 1.");
-  if (!Array.isArray(members) || members.length < 3)
-    throw new Error("Members list must have at least 3 people.");
 
-  // 1) Insert league
-  // NOTE: your DB also has owner_id NOT NULL (you hit that error earlier).
-  // We set owner_id automatically by reading auth user id.
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-
+  // Get the currently logged-in user (owner of the league)
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr) throw userErr;
-  if (!user?.id) throw new Error("You must be logged in to create a league.");
+  const ownerId = userData?.user?.id;
+  if (!ownerId) throw new Error("You must be logged in to create a league.");
+
+  // 1) Insert league (owner_id is REQUIRED in your schema)
+  const leagueInsert = {
+    name: name.trim(),
+    owner_id: ownerId,
+    weeks,
+    draft_mode: draftMode,
+    commissioner_email: commEmail,
+  };
 
   const { data: league, error: leagueErr } = await supabase
     .from("leagues")
-    .insert({
-      name: name.trim(),
-      owner_id: user.id, // fixes your NOT NULL owner_id error
-      commissioner_email: commEmail,
-      weeks,
-      draft_mode: draftMode,
-    })
+    .insert(leagueInsert)
     .select()
     .single();
 
   if (leagueErr) throw leagueErr;
 
   // 2) Insert league members
-  // RULE: Commissioner + selected League Managers log in => they have user_id
-  // Everyone else can exist with username + pin_hash and null user_id.
+  // RULE: Only Commissioner + selected League Managers log in
+  // => only those rows should have user_id set. Everyone else user_id = null.
   const memberRows = [];
+
   for (const m of members) {
     const displayName = (m.display_name || "").trim() || "Member";
-    const isCommissioner = m.role === "commissioner";
-    const wantsLM = !!m.is_league_manager || isCommissioner;
+    const wantsLM = !!m.wantsLM;
 
-    // Only commissioner + LMs require user_id
-    const userId = safeText(m.user_id);
-    if (wantsLM && !userId) {
+    // Only allow real UUID user_id if this person is actually going to log in.
+    // Commissioner ALWAYS logs in.
+    // Selected LMs log in (you said commissioner + selected LMs log in).
+    const isCommissioner = !!m.isCommissioner;
+    const shouldHaveAuthUserId = isCommissioner || wantsLM;
+
+    const row = {
+      league_id: league.id,
+
+      // KEY FIX:
+      // - if not a login person, store null so we don't hit FK errors.
+      user_id: shouldHaveAuthUserId ? (m.user_id || null) : null,
+
+      display_name: displayName,
+
+      // KEY FIX:
+      // - match DB constraint: commissioner / verifier / player
+      role: toLeagueMemberRole({ isCommissioner, wantsLM }),
+
+      is_league_manager: isCommissioner ? true : wantsLM,
+      username: m.username || null,
+      pin_hash: m.pin ? await hashPin(m.pin) : null,
+    };
+
+    // If they *should* have a user_id (commissioner or LM) but it’s missing,
+    // fail loudly so we don’t create broken LMs.
+    if (shouldHaveAuthUserId && !row.user_id) {
       throw new Error(
-        `League Manager "${displayName}" must log in (missing user_id).`
+        `Missing user_id for login member "${displayName}". Commissioner + League Managers must be real logged-in users.`
       );
     }
 
-    const role = mapRole({ isCommissioner, isLeagueManager: wantsLM });
-
-    const pinHash = await hashPin(m.pin);
-
-    memberRows.push({
-      league_id: league.id,
-      user_id: userId, // can be null for non-login members
-      display_name: displayName,
-      role,
-      username: safeText(m.username),
-      pin_hash: pinHash,
-    });
+    memberRows.push(row);
   }
 
   const { data: insertedMembers, error: membersErr } = await supabase
@@ -131,7 +132,7 @@ export async function createLeagueWithGeneratedData({
   const { error: draftErr } = await supabase.from("draft_order").insert(draftRows);
   if (draftErr) throw draftErr;
 
-  // 4) Schedule generation (persist once)
+  // 4) Schedule generation
   const schedule = generateRoundRobinSchedule(memberIds, weeks);
 
   const scheduleRows = schedule.map((s) => ({
